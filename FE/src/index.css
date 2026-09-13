@@ -1,31 +1,22 @@
 :root {
-  --bg: #f5f6f8;
+  --bg: #fff6f0;
+  --dot: #fad3da;
   --surface: #ffffff;
-  --text: #1c1f24;
-  --muted: #6b7280;
-  --border: #e3e5e9;
-  --accent: #4f46e5;
-  --accent-text: #ffffff;
-  --user-bubble: #4f46e5;
-  --danger: #dc2626;
-  --danger-bg: #fdecec;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --ink: #3b2230;
+  --text: #4a3a3f;
+  --muted: #ab959c;
+  --border: #f3dfd3;
+  --ledge: #f1d9cb;
+  --accent: #ff5a7a;
+  --accent-ledge: #e03c60;
+  --accent-soft: #fff0f3;
+  --accent-soft-text: #f4a3b5;
+  --danger: #d64545;
+  --danger-bg: #ffe9e9;
+  color-scheme: light;
+  font-family: "Nunito", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
   color: var(--text);
   background: var(--bg);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #111317;
-    --surface: #1b1e24;
-    --text: #e8eaed;
-    --muted: #9aa0a8;
-    --border: #2a2e35;
-    --accent: #6366f1;
-    --user-bubble: #4f46e5;
-    --danger: #f87171;
-    --danger-bg: #3a1d1d;
-  }
 }
 
 * {
@@ -34,59 +25,81 @@
 
 body {
   margin: 0;
+  background: var(--bg);
 }
 
 .app {
-  max-width: 760px;
   height: 100vh;
-  margin: 0 auto;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
+  background-color: var(--bg);
+  background-image: radial-gradient(circle, var(--dot) 1.4px, transparent 1.8px);
+  background-size: 27px 27px;
+  background-position: 7px 7px;
+}
+
+.container {
+  width: 100%;
+  max-width: 760px;
+  margin-inline: auto;
   padding-inline: 16px;
 }
 
 .header {
+  flex-shrink: 0;
+  background: var(--surface);
+  border-bottom: 2px solid var(--border);
+}
+
+.header-inner {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-block: 16px;
-  border-bottom: 1px solid var(--border);
+  gap: 12px;
+  padding-block: 30px;
 }
 
-.header h1 {
-  font-size: 1.25rem;
+.logo {
   margin: 0;
+  font-family: "Fredoka", "Nunito", "Segoe UI", system-ui, sans-serif;
+  font-size: 1.85rem;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  color: var(--ink);
 }
 
-.toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.875rem;
-  color: var(--muted);
-  cursor: pointer;
+.logo span {
+  color: var(--accent);
 }
 
 .chat {
   flex: 1;
   overflow-y: auto;
+}
+
+.chat-inner {
+  min-height: 100%;
   padding-block: 20px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
 }
 
 .empty {
   margin: auto;
   color: var(--muted);
+  font-size: 1.05rem;
+  font-weight: 600;
   text-align: center;
 }
 
 .bubble {
   max-width: 80%;
-  padding: 10px 14px;
-  border-radius: 14px;
-  line-height: 1.45;
+  padding: 10px 16px;
+  border-radius: 20px;
+  line-height: 1.5;
 }
 
 .bubble p {
@@ -96,22 +109,24 @@ body {
 
 .bubble .role {
   font-size: 0.75rem;
-  font-weight: 600;
+  font-weight: 700;
   opacity: 0.75;
 }
 
 .bubble.user {
   align-self: flex-end;
-  background: var(--user-bubble);
+  background: var(--accent);
   color: #fff;
-  border-bottom-right-radius: 4px;
+  border-bottom-right-radius: 6px;
+  box-shadow: 0 3px 0 var(--accent-ledge);
 }
 
 .bubble.assistant {
   align-self: flex-start;
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-bottom-left-radius: 4px;
+  border: 2px solid var(--border);
+  border-bottom-left-radius: 6px;
+  box-shadow: 0 3px 0 var(--ledge);
 }
 
 .bubble audio {
@@ -157,19 +172,16 @@ body {
 .error {
   background: var(--danger-bg);
   color: var(--danger);
-  padding: 10px 14px;
-  border-radius: 10px;
+  padding: 10px 16px;
+  border-radius: 14px;
   font-size: 0.9rem;
+  font-weight: 600;
   margin-bottom: 8px;
 }
 
 .controls {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding-block: 16px;
-  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  padding-block: 8px 24px;
 }
 
 button {
@@ -180,42 +192,129 @@ button {
 
 button:disabled {
   cursor: not-allowed;
-  opacity: 0.5;
+}
+
+.composer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 6px 22px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-radius: 999px;
+  box-shadow: 0 5px 0 var(--ledge);
+  transition: border-color 0.15s;
+}
+
+.composer:focus-within {
+  border-color: #ffc4d1;
+}
+
+.keyboard {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+.composer input {
+  flex: 1;
+  min-width: 0;
+  padding-block: 12px;
+  border: none;
+  outline: none;
+  background: transparent;
+  font: inherit;
+  font-size: 1.05rem;
+  color: var(--text);
+  text-overflow: ellipsis;
+}
+
+.composer input::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
+.send,
+.mic {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+}
+
+.send {
+  width: 48px;
+  height: 48px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  transition: background 0.15s, color 0.15s;
+}
+
+.send:disabled {
+  color: var(--accent-soft-text);
+}
+
+.send:not(:disabled):hover {
+  background: #ffe2e9;
 }
 
 .mic {
-  width: 64px;
-  height: 64px;
-  border-radius: 50%;
+  width: 58px;
+  height: 58px;
+  margin-bottom: 4px;
   background: var(--accent);
-  color: var(--accent-text);
-  display: grid;
-  place-items: center;
-  transition: transform 0.15s;
+  color: #fff;
+  box-shadow: 0 4px 0 var(--accent-ledge);
+  transition: transform 0.1s, box-shadow 0.1s;
 }
 
-.mic:not(:disabled):hover {
-  transform: scale(1.05);
+.mic:not(:disabled):active {
+  transform: translateY(3px);
+  box-shadow: 0 1px 0 var(--accent-ledge);
+}
+
+.mic:disabled {
+  opacity: 0.55;
 }
 
 .mic.recording {
-  background: var(--danger);
   animation: pulse 1.4s infinite;
 }
 
 @keyframes pulse {
-  0% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.5); }
-  70% { box-shadow: 0 0 0 16px rgba(220, 38, 38, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0); }
-}
-
-.status {
-  font-size: 0.875rem;
-  color: var(--muted);
+  0% { box-shadow: 0 4px 0 var(--accent-ledge), 0 0 0 0 rgba(255, 90, 122, 0.5); }
+  70% { box-shadow: 0 4px 0 var(--accent-ledge), 0 0 0 14px rgba(255, 90, 122, 0); }
+  100% { box-shadow: 0 4px 0 var(--accent-ledge), 0 0 0 0 rgba(255, 90, 122, 0); }
 }
 
 @media (max-width: 480px) {
+  .header-inner {
+    padding-block: 24px;
+  }
+
+  .logo {
+    font-size: 1.6rem;
+  }
+
   .bubble {
     max-width: 92%;
+  }
+
+  .composer {
+    padding-left: 14px;
+    gap: 6px;
+  }
+
+  .composer input {
+    font-size: 1rem;
+  }
+
+  .send {
+    width: 42px;
+    height: 42px;
+  }
+
+  .mic {
+    width: 52px;
+    height: 52px;
   }
 }

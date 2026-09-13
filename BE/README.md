@@ -1,6 +1,6 @@
-# Voice Agent API
+# DailyTongue API
 
-A minimal FastAPI voice agent. Upload an audio file and receive its transcript and assistant response.
+A minimal FastAPI DailyTongue. Upload an audio file and receive its transcript and assistant response.
 
 ## Setup
 

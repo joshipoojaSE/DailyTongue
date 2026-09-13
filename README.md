@@ -1,4 +1,4 @@
-# Voice Agent
+# DailyTongue
 
 A minimal voice assistant: speak into your microphone, see your words transcribed, and hear the agent reply.
 

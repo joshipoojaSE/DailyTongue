@@ -24,7 +24,7 @@ export default function App() {
   // null | "transcribing" | "thinking"
   const [stage, setStage] = useState(null);
   const [error, setError] = useState("");
-  const [autoPlay, setAutoPlay] = useState(true);
+  const [draft, setDraft] = useState("");
   const { isRecording, start, stop } = useRecorder();
   const bottomRef = useRef(null);
 
@@ -36,7 +36,27 @@ export default function App() {
     setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, ...changes } : m)));
   }
 
-  async function submit(blob, filename) {
+  async function reply(text) {
+    setStage("thinking");
+    try {
+      const data = await getReply(text);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: nextId++,
+          role: "assistant",
+          text: data.response,
+          audioSrc: `data:audio/mpeg;base64,${data.audio_base64}`,
+        },
+      ]);
+    } catch (err) {
+      setError(err.message || "Something went wrong");
+    } finally {
+      setStage(null);
+    }
+  }
+
+  async function submitAudio(blob, filename) {
     setError("");
 
     // Show the user's bubble immediately; fill in the text once transcribed.
@@ -62,31 +82,24 @@ export default function App() {
     }
 
     updateMessage(userId, { text: transcript, pending: false });
-    setStage("thinking");
+    await reply(transcript);
+  }
 
-    try {
-      const data = await getReply(transcript);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: nextId++,
-          role: "assistant",
-          text: data.response,
-          audioSrc: `data:audio/mpeg;base64,${data.audio_base64}`,
-          autoPlay,
-        },
-      ]);
-    } catch (err) {
-      setError(err.message || "Something went wrong");
-    } finally {
-      setStage(null);
-    }
+  function submitText(e) {
+    e.preventDefault();
+    const text = draft.trim();
+    if (!text || busy || isRecording) return;
+
+    setError("");
+    setDraft("");
+    setMessages((prev) => [...prev, { id: nextId++, role: "user", text }]);
+    reply(text);
   }
 
   async function handleMicClick() {
     if (isRecording) {
       const result = await stop();
-      if (result && result.blob.size > 0) submit(result.blob, result.filename);
+      if (result && result.blob.size > 0) submitAudio(result.blob, result.filename);
       return;
     }
     try {
@@ -98,74 +111,110 @@ export default function App() {
   }
 
   const busy = stage !== null;
+  const placeholder = isRecording
+    ? "Listening… tap the mic to send"
+    : STATUS[stage] ?? "Type in English, or tap the mic to talk";
 
   return (
     <div className="app">
       <header className="header">
-        <h1>Voice Agent</h1>
-        <label className="toggle">
-          <input
-            type="checkbox"
-            checked={autoPlay}
-            onChange={(e) => setAutoPlay(e.target.checked)}
-          />
-          Auto-play replies
-        </label>
+        <div className="container header-inner">
+          <h1 className="logo">
+            Daily<span>Tongue</span>
+          </h1>
+        </div>
       </header>
 
       <main className="chat">
-        {messages.length === 0 && !busy && (
-          <p className="empty">
-            Tap the microphone and start speaking.
-          </p>
-        )}
+        <div className="container chat-inner">
+          {messages.length === 0 && !busy && (
+            <p className="empty">
+              Say hello in English — type below or tap the mic.
+            </p>
+          )}
 
-        {messages.map((m) => (
-          <div key={m.id} className={`bubble ${m.role}`}>
-            <span className="role">{m.role === "user" ? "You" : "Agent"}</span>
-            {m.pending ? <Dots /> : <p>{m.text}</p>}
-            {m.audioSrc && (
-              <audio controls src={m.audioSrc} autoPlay={m.autoPlay} />
-            )}
-          </div>
-        ))}
+          {messages.map((m) => (
+            <div key={m.id} className={`bubble ${m.role}`}>
+              <span className="role">{m.role === "user" ? "You" : "Agent"}</span>
+              {m.pending ? <Dots /> : <p>{m.text}</p>}
+              {m.audioSrc && (
+                <audio controls src={m.audioSrc} autoPlay />
+              )}
+            </div>
+          ))}
 
-        {stage === "thinking" && (
-          <div className="bubble assistant">
-            <span className="role">Agent</span>
-            <Dots />
-          </div>
-        )}
-        <div ref={bottomRef} />
+          {stage === "thinking" && (
+            <div className="bubble assistant">
+              <span className="role">Agent</span>
+              <Dots />
+            </div>
+          )}
+          <div ref={bottomRef} />
+        </div>
       </main>
 
-      {error && <div className="error">{error}</div>}
+      <footer className="container controls">
+        {error && <div className="error">{error}</div>}
 
-      <footer className="controls">
-        <button
-          type="button"
-          className={`mic ${isRecording ? "recording" : ""}`}
-          onClick={handleMicClick}
-          disabled={busy}
-          aria-label={isRecording ? "Stop recording" : "Start recording"}
-        >
-          {isRecording ? (
-            <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true">
-              <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" />
-            </svg>
-          ) : (
-            <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true">
+        <form className="composer" onSubmit={submitText}>
+          <svg className="keyboard" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+            <rect x="2.5" y="6" width="19" height="12" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.8" />
+            <path
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              d="M6.5 10h.01M10 10h.01M13.5 10h.01M17 10h.01M8 14.5h8"
+            />
+          </svg>
+
+          <input
+            type="text"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder={placeholder}
+            disabled={isRecording}
+            aria-label="Message"
+          />
+
+          <button
+            type="submit"
+            className="send"
+            disabled={!draft.trim() || busy || isRecording}
+            aria-label="Send message"
+          >
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
               <path
-                fill="currentColor"
-                d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2Z"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M5 12h14M13 6l6 6-6 6"
               />
             </svg>
-          )}
-        </button>
+          </button>
 
-        <span className="status">
-          {isRecording ? "Listening… tap to send" : STATUS[stage] ?? "Ready"}
-        </span>
+          <button
+            type="button"
+            className={`mic ${isRecording ? "recording" : ""}`}
+            onClick={handleMicClick}
+            disabled={busy}
+            aria-label={isRecording ? "Stop recording" : "Start recording"}
+          >
+            {isRecording ? (
+              <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+                <rect x="6" y="6" width="12" height="12" rx="2.5" fill="currentColor" />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2Z"
+                />
+              </svg>
+            )}
+          </button>
+        </form>
       </footer>
     </div>
   );

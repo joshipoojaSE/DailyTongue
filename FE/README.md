@@ -1,6 +1,6 @@
-# Voice Agent Frontend
+# DailyTongue Frontend
 
-React (Vite) UI for the Voice Agent API in `../BE`.
+React (Vite) UI for the DailyTongue API in `../BE`.
 
 Record from your microphone. The app sends the recording to `POST /transcribe` and shows
 your transcript as soon as it's ready, then sends that text to `POST /respond` to get the

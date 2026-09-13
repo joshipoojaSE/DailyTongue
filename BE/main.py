@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 load_dotenv()
 
-app = FastAPI(title="Voice Agent API")
+app = FastAPI(title="DailyTongue API")
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 SYSTEM_PROMPT = """You're an expert voice agent. You are given the transcript of what
