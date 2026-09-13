@@ -64,7 +64,7 @@ During development, Vite proxies `/api/*` to the backend, so you don't need to s
 | Method | Path          | Body                        | Returns                                    |
 | ------ | ------------- | --------------------------- | ------------------------------------------ |
 | POST   | `/transcribe` | multipart form, `audio` file | `{ transcript }`                           |
-| POST   | `/respond`    | JSON `{ "text": "..." }`    | `{ response, audio_base64 }`               |
+| POST   | `/respond`    | JSON `{ "messages": [{ "role", "content" }] }` | `{ response, audio_base64 }` |
 | POST   | `/chat`       | multipart form, `audio` file | `{ transcript, response, audio_base64 }`   |
 
 `audio_base64` holds MP3 audio. The API accepts common audio formats such as WAV, MP3, M4A, and WEBM. Interactive docs are at http://127.0.0.1:8000/docs while the server is running.

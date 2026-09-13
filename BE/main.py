@@ -1,6 +1,7 @@
 import base64
 import os
 import tempfile
+from typing import Literal
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -17,6 +18,9 @@ user has said using voice. Respond as a voice agent because your response may be
 converted back to audio and played to the user.
 """
 
+# Only the most recent turns are sent to the model, to bound prompt size.
+MAX_HISTORY_MESSAGES = 20
+
 
 class ChatResponse(BaseModel):
     transcript: str
@@ -28,8 +32,13 @@ class TranscribeResponse(BaseModel):
     transcript: str
 
 
+class Message(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
 class RespondRequest(BaseModel):
-    text: str
+    messages: list[Message]
 
 
 class RespondResponse(BaseModel):
@@ -64,12 +73,12 @@ async def transcribe_upload(audio: UploadFile) -> str:
             os.unlink(file_path)
 
 
-async def generate_reply(transcript: str) -> RespondResponse:
+async def generate_reply(history: list[Message]) -> RespondResponse:
     completion = await client.chat.completions.create(
         model="gpt-4.1-mini",
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": transcript},
+            *(m.model_dump() for m in history[-MAX_HISTORY_MESSAGES:]),
         ],
     )
 
@@ -94,7 +103,7 @@ async def generate_reply(transcript: str) -> RespondResponse:
 @app.post("/chat", response_model=ChatResponse)
 async def chat(audio: UploadFile = File(...)) -> ChatResponse:
     transcript = await transcribe_upload(audio)
-    reply = await generate_reply(transcript)
+    reply = await generate_reply([Message(role="user", content=transcript)])
     return ChatResponse(transcript=transcript, **reply.model_dump())
 
 
@@ -105,6 +114,9 @@ async def transcribe(audio: UploadFile = File(...)) -> TranscribeResponse:
 
 @app.post("/respond", response_model=RespondResponse)
 async def respond(request: RespondRequest) -> RespondResponse:
-    if not request.text.strip():
-        raise HTTPException(status_code=400, detail="Text is required")
-    return await generate_reply(request.text)
+    messages = request.messages
+    if not messages or messages[-1].role != "user" or not messages[-1].content.strip():
+        raise HTTPException(
+            status_code=400, detail="The last message must be non-empty user text"
+        )
+    return await generate_reply(messages)

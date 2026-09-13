@@ -1,8 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { getReply, transcribeAudio } from "./api.js";
-import { useRecorder } from "./useRecorder.js";
+import { SILENCE_MS, useRecorder } from "./useRecorder.js";
 
 let nextId = 1;
+
+// Blob URLs play and replay reliably; long data: URLs often can't be
+// seeked or replayed in Chrome once they've finished.
+function mp3Url(base64) {
+  const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+  return URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" }));
+}
 
 const STATUS = {
   transcribing: "Transcribing…",
@@ -25,7 +32,9 @@ export default function App() {
   const [stage, setStage] = useState(null);
   const [error, setError] = useState("");
   const [draft, setDraft] = useState("");
-  const { isRecording, start, stop } = useRecorder();
+  const { isRecording, levels, start, stop, cancel } = useRecorder({
+    onSilence: finishRecording,
+  });
   const bottomRef = useRef(null);
 
   useEffect(() => {
@@ -38,15 +47,25 @@ export default function App() {
 
   async function reply(text) {
     setStage("thinking");
+
+    // Earlier turns plus the new user message. `messages` is this render's
+    // snapshot, taken before the new message was added to state.
+    const history = [
+      ...messages
+        .filter((m) => !m.pending && m.text)
+        .map((m) => ({ role: m.role, content: m.text })),
+      { role: "user", content: text },
+    ];
+
     try {
-      const data = await getReply(text);
+      const data = await getReply(history);
       setMessages((prev) => [
         ...prev,
         {
           id: nextId++,
           role: "assistant",
           text: data.response,
-          audioSrc: `data:audio/mpeg;base64,${data.audio_base64}`,
+          audioSrc: mp3Url(data.audio_base64),
         },
       ]);
     } catch (err) {
@@ -96,10 +115,14 @@ export default function App() {
     reply(text);
   }
 
+  async function finishRecording() {
+    const result = await stop();
+    if (result && result.blob.size > 0) submitAudio(result.blob, result.filename);
+  }
+
   async function handleMicClick() {
     if (isRecording) {
-      const result = await stop();
-      if (result && result.blob.size > 0) submitAudio(result.blob, result.filename);
+      finishRecording();
       return;
     }
     try {
@@ -111,9 +134,7 @@ export default function App() {
   }
 
   const busy = stage !== null;
-  const placeholder = isRecording
-    ? "Listening… tap the mic to send"
-    : STATUS[stage] ?? "Type in English, or tap the mic to talk";
+  const placeholder = STATUS[stage] ?? "Type in English, or tap the mic to talk";
 
   return (
     <div className="app">
@@ -156,43 +177,76 @@ export default function App() {
       <footer className="container controls">
         {error && <div className="error">{error}</div>}
 
-        <form className="composer" onSubmit={submitText}>
-          <svg className="keyboard" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-            <rect x="2.5" y="6" width="19" height="12" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.8" />
-            <path
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              d="M6.5 10h.01M10 10h.01M13.5 10h.01M17 10h.01M8 14.5h8"
-            />
-          </svg>
+        <form className={`composer ${isRecording ? "recording" : ""}`} onSubmit={submitText}>
+          {isRecording ? (
+            <>
+              <div className="listening" role="status">
+                <div className="waveform" aria-hidden="true">
+                  {levels.map((level, i) => (
+                    <span key={i} style={{ height: 8 + level * 22 }} />
+                  ))}
+                </div>
+                <p className="listening-hint">
+                  Listening… I'll stop after {SILENCE_MS / 1000} seconds of quiet
+                </p>
+              </div>
 
-          <input
-            type="text"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder={placeholder}
-            disabled={isRecording}
-            aria-label="Message"
-          />
+              <button
+                type="button"
+                className="cancel"
+                onClick={cancel}
+                aria-label="Cancel recording"
+              >
+                <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                  <path
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.2"
+                    strokeLinecap="round"
+                    d="M7 7l10 10M17 7 7 17"
+                  />
+                </svg>
+              </button>
+            </>
+          ) : (
+            <>
+              <svg className="keyboard" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+                <rect x="2.5" y="6" width="19" height="12" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.8" />
+                <path
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  d="M6.5 10h.01M10 10h.01M13.5 10h.01M17 10h.01M8 14.5h8"
+                />
+              </svg>
 
-          <button
-            type="submit"
-            className="send"
-            disabled={!draft.trim() || busy || isRecording}
-            aria-label="Send message"
-          >
-            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
-              <path
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M5 12h14M13 6l6 6-6 6"
+              <input
+                type="text"
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                placeholder={placeholder}
+                aria-label="Message"
               />
-            </svg>
-          </button>
+
+              <button
+                type="submit"
+                className="send"
+                disabled={!draft.trim() || busy}
+                aria-label="Send message"
+              >
+                <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                  <path
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M5 12h14M13 6l6 6-6 6"
+                  />
+                </svg>
+              </button>
+            </>
+          )}
 
           <button
             type="button"

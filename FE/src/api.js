@@ -24,10 +24,13 @@ export function transcribeAudio(blob, filename) {
   return request("/transcribe", { body: form });
 }
 
-/** Sends the user's text; resolves to { response, audio_base64 }. */
-export function getReply(text) {
+/**
+ * Sends the conversation so far ([{ role, content }], ending with the user's
+ * latest message); resolves to { response, audio_base64 }.
+ */
+export function getReply(messages) {
   return request("/respond", {
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ messages }),
   });
 }

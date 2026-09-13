@@ -40,8 +40,11 @@ Two-step, so a client can show the transcript before the reply is ready:
 curl -X POST http://127.0.0.1:8000/transcribe ^
   -F "audio=@recording.wav"
 
-# 2. Text -> { "response": "...", "audio_base64": "..." }
+# 2. Conversation -> { "response": "...", "audio_base64": "..." }
 curl -X POST http://127.0.0.1:8000/respond ^
   -H "Content-Type: application/json" ^
-  -d "{\"text\": \"Hello, how are you?\"}"
+  -d "{\"messages\": [{\"role\": \"user\", \"content\": \"Hello, how are you?\"}]}"
 ```
+
+`messages` is the conversation so far, oldest first, and must end with a `user` message.
+The server sends only the last 20 messages to the model.
