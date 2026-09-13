@@ -156,7 +156,7 @@ export default function App() {
 
           {messages.map((m) => (
             <div key={m.id} className={`bubble ${m.role}`}>
-              <span className="role">{m.role === "user" ? "You" : "Agent"}</span>
+              <span className="role">{m.role === "user" ? "You" : "Kai"}</span>
               {m.pending ? <Dots /> : <p>{m.text}</p>}
               {m.audioSrc && (
                 <audio controls src={m.audioSrc} autoPlay />
@@ -166,7 +166,7 @@ export default function App() {
 
           {stage === "thinking" && (
             <div className="bubble assistant">
-              <span className="role">Agent</span>
+              <span className="role">Kai</span>
               <Dots />
             </div>
           )}

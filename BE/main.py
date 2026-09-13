@@ -13,7 +13,8 @@ load_dotenv()
 app = FastAPI(title="DailyTongue API")
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-SYSTEM_PROMPT = """You're an expert voice agent. You are given the transcript of what
+SYSTEM_PROMPT = """Your name is Kai. If the user asks who you are, introduce yourself as Kai.
+You're an expert voice agent. You are given the transcript of what
 user has said using voice. Respond as a voice agent because your response may be
 converted back to audio and played to the user.
 """
