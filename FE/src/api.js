@@ -36,10 +36,18 @@ export function getReply(messages, conversationId) {
   });
 }
 
+/** Reads text aloud in Ila's (the tutor's) voice; resolves to { audio_base64 } (MP3). */
+export function speak(text) {
+  return request("/speak", {
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+}
+
 /**
  * Asks the tutor to check the user's latest message in the conversation
  * ([{ role, content }], which may end with Kai's reply); resolves to
- * { id, message, corrected, mistakes: [{ original, correction, explanation }], created_at }.
+ * { id, message, corrected, mistakes: [{ original, correction, explanation }], rephrased, created_at }.
  */
 export function getFeedback(conversationId, messages) {
   return request(`/conversations/${encodeURIComponent(conversationId)}/feedback`, {

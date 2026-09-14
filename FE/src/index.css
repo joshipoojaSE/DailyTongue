@@ -182,6 +182,56 @@ body {
   opacity: 0.85;
 }
 
+.feedback .rephrased {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px dashed currentColor;
+}
+
+/* Listen button after a tutor sentence. */
+.feedback .speak {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin: 0 0 0 6px;
+  padding: 0;
+  vertical-align: middle;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.feedback .speak svg {
+  width: 16px;
+  height: 16px;
+}
+
+.feedback .speak:hover:not(:disabled),
+.feedback .speak.playing {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.feedback .speak.loading {
+  opacity: 0.5;
+  cursor: progress;
+  animation: speak-pulse 1s ease-in-out infinite;
+}
+
+.feedback .speak.error {
+  color: #c0392b;
+}
+
+@keyframes speak-pulse {
+  50% {
+    opacity: 0.2;
+  }
+}
+
 .dots {
   display: flex;
   gap: 4px;

@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from "react";
-import { getFeedback, getReply, transcribeAudio } from "./api.js";
+import { getFeedback, getReply, speak, transcribeAudio } from "./api.js";
 import { SILENCE_MS, useRecorder } from "./useRecorder.js";
 
 let nextId = 1;
@@ -26,7 +26,80 @@ function Dots() {
   );
 }
 
-// The tutor's note on one of the user's messages:
+// Only one tutor sentence plays at a time.
+let activeAudio = null;
+
+// Reads a tutor sentence aloud. The audio is fetched on the first click and
+// reused after that, so each sentence costs at most one speech request.
+function SpeakButton({ text }) {
+  // "idle" | "loading" | "playing" | "error"
+  const [state, setState] = useState("idle");
+  const audioRef = useRef(null);
+
+  useEffect(() => () => audioRef.current?.pause(), []);
+
+  async function toggle() {
+    let audio = audioRef.current;
+    if (state === "playing") {
+      audio.pause();
+      return;
+    }
+
+    try {
+      if (!audio) {
+        setState("loading");
+        const { audio_base64 } = await speak(text);
+        audio = new Audio(mp3Url(audio_base64));
+        audio.onplay = () => setState("playing");
+        audio.onpause = audio.onended = () => setState("idle");
+        audioRef.current = audio;
+      }
+      if (activeAudio && activeAudio !== audio) activeAudio.pause();
+      activeAudio = audio;
+      audio.currentTime = 0;
+      await audio.play();
+    } catch {
+      setState("error");
+    }
+  }
+
+  const label = {
+    idle: "Listen",
+    loading: "Loading audio",
+    playing: "Stop",
+    error: "Couldn't play audio. Try again",
+  }[state];
+
+  return (
+    <button
+      type="button"
+      className={`speak ${state}`}
+      onClick={toggle}
+      disabled={state === "loading"}
+      aria-label={`${label}: ${text}`}
+      title={label}
+    >
+      {state === "playing" ? (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor" />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor" />
+          <path
+            d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+          />
+        </svg>
+      )}
+    </button>
+  );
+}
+
+// Ila the tutor's note on one of the user's messages:
 // { status: "pending" | "done" | "error", data? }.
 function Feedback({ feedback }) {
   const { status, data } = feedback;
@@ -44,6 +117,7 @@ function Feedback({ feedback }) {
       <>
         <p>
           Try saying: <strong>{data.corrected}</strong>
+          <SpeakButton text={data.corrected} />
         </p>
         <ul className="mistakes">
           {data.mistakes.map((m, i) => (
@@ -59,8 +133,14 @@ function Feedback({ feedback }) {
 
   return (
     <div className={`feedback ${correct ? "correct" : ""}`}>
-      <span className="role">Tutor</span>
+      <span className="role">Ila · Tutor</span>
       {body}
+      {status === "done" && data.rephrased && (
+        <p className="rephrased">
+          Another way to say it: <em>{data.rephrased}</em>
+          <SpeakButton text={data.rephrased} />
+        </p>
+      )}
     </div>
   );
 }

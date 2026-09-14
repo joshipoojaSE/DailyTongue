@@ -21,10 +21,10 @@ The frontend makes two requests so it can show your transcript before the reply 
 | Agent | Role | Sees |
 | ----- | ---- | ---- |
 | **User** | The learner, chatting normally | Their own conversation with Kai |
-| **Tutor** | Silent observer and English coach. Corrects every message the learner sends and stores the feedback in the database | The full conversation between the learner and Kai (both sides) |
+| **Ila** (tutor) | A warm 30-year-old English tutor who silently observes and coaches. Corrects every message the learner sends, suggests a more natural way to rephrase it, and stores the feedback in the database | The full conversation between the learner and Kai (both sides) |
 | **Kai** | Conversational partner with general knowledge | Only its own conversation with the learner |
 
-Once Kai's reply arrives, the frontend sends the conversation, including that reply, to `POST /conversations/{conversation_id}/feedback`. The tutor corrects the learner's latest message and saves the feedback in SQLite, and the frontend shows it in a small **Tutor** note under that message. The tutor never slows down Kai's reply or speaks in the chat, and Kai never sees its feedback. `GET /conversations/{conversation_id}/feedback` lists all feedback for a conversation.
+Once Kai's reply arrives, the frontend sends the conversation, including that reply, to `POST /conversations/{conversation_id}/feedback`. Ila corrects the learner's latest message, suggests another way to say it, and saves the feedback in SQLite, and the frontend shows it in a small **Ila · Tutor** note under that message. A 🔊 button next to the corrected and rephrased sentences reads them aloud in Ila's voice through `POST /speak`, so the learner can hear how they sound. The tutor never slows down Kai's reply or speaks in the chat, and Kai never sees its feedback. `GET /conversations/{conversation_id}/feedback` lists all feedback for a conversation.
 
 ## Prerequisites
 
@@ -76,8 +76,9 @@ During development, Vite proxies `/api/*` to the backend, so you don't need to s
 | POST   | `/transcribe` | multipart form, `audio` file | `{ transcript }`                           |
 | POST   | `/respond`    | JSON `{ "messages": [{ "role", "content" }], "conversation_id"? }` | `{ response, audio_base64, conversation_id }` |
 | POST   | `/chat`       | multipart form, `audio` file, optional `conversation_id` | `{ transcript, response, audio_base64, conversation_id, feedback }` |
-| POST   | `/conversations/{conversation_id}/feedback` | JSON `{ "messages": [{ "role", "content" }] }` | `{ id, message, corrected, mistakes: [{ original, correction, explanation }], created_at }` |
+| POST   | `/conversations/{conversation_id}/feedback` | JSON `{ "messages": [{ "role", "content" }] }` | `{ id, message, corrected, mistakes: [{ original, correction, explanation }], rephrased, created_at }` |
 | GET    | `/conversations/{conversation_id}/feedback` | — | A list of the feedback objects above, oldest first |
+| POST   | `/speak`      | JSON `{ "text" }` (up to 1000 characters) | `{ audio_base64 }` of the text read slowly and clearly |
 
 Omit `conversation_id` to start a new conversation; send back the returned one on later turns. `audio_base64` holds MP3 audio. The API accepts common audio formats such as WAV, MP3, M4A, and WEBM. Interactive docs are at http://127.0.0.1:8000/docs while the server is running.
 

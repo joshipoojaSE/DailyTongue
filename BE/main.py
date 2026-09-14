@@ -39,11 +39,12 @@ user has said using voice. Respond as a voice agent because your response may be
 converted back to audio and played to the user.
 """
 
-# Agent 2: the tutor. Silently observes the whole conversation and coaches
+# Agent 2: Ila, the tutor. Silently observes the whole conversation and coaches
 # the learner's English one message at a time.
-TUTOR_PROMPT = """You are a silent English tutor observing a conversation between an English
+TUTOR_PROMPT = """Your name is Ila. You are a warm, encouraging 30-year-old woman and an
+experienced English tutor. You are silently observing a conversation between an English
 learner and Kai, their conversational partner. You never speak to the learner or to Kai;
-you only produce written feedback.
+you only produce written feedback, in your own friendly, supportive voice.
 
 Correct only the learner's latest message. Use the rest of the conversation, including
 Kai's replies, as context for what the learner meant.
@@ -58,6 +59,10 @@ Kai's replies, as context for what the learner meant.
   (for example "movie", not the whole sentence); correction is what replaces them; add a
   short, encouraging explanation. Leave it empty if the message is already correct
   and natural.
+- rephrased: another way to say the same thing that sounds more natural or expressive in
+  everyday spoken English, so the learner picks up new vocabulary and phrasing. Always
+  provide one, even when the message is correct, and make it noticeably different from
+  corrected while keeping the meaning and a similar level of difficulty.
 """
 
 SPEAKERS = {"user": "Learner", "assistant": "Kai"}
@@ -98,6 +103,7 @@ class Mistake(BaseModel):
 class TutorFeedback(BaseModel):
     corrected: str
     mistakes: list[Mistake]
+    rephrased: str
 
 
 class FeedbackEntry(TutorFeedback):
@@ -113,6 +119,14 @@ class FeedbackRequest(BaseModel):
 class ChatResponse(RespondResponse):
     transcript: str
     feedback: FeedbackEntry | None
+
+
+class SpeakRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=1000)
+
+
+class SpeakResponse(BaseModel):
+    audio_base64: str
 
 
 def connect() -> sqlite3.Connection:
@@ -131,10 +145,17 @@ def init_db() -> None:
                 message TEXT NOT NULL,
                 corrected TEXT NOT NULL,
                 mistakes TEXT NOT NULL,
+                rephrased TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
+        # Databases created before rephrasing was added lack the column.
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(feedback)")}
+        if "rephrased" not in columns:
+            conn.execute(
+                "ALTER TABLE feedback ADD COLUMN rephrased TEXT NOT NULL DEFAULT ''"
+            )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS feedback_conversation ON feedback (conversation_id)"
         )
@@ -145,13 +166,14 @@ def save_feedback(
 ) -> FeedbackEntry:
     with closing(connect()) as conn, conn:
         (row,) = conn.execute(
-            "INSERT INTO feedback (conversation_id, message, corrected, mistakes)"
-            " VALUES (?, ?, ?, ?) RETURNING id, created_at",
+            "INSERT INTO feedback (conversation_id, message, corrected, mistakes, rephrased)"
+            " VALUES (?, ?, ?, ?, ?) RETURNING id, created_at",
             (
                 conversation_id,
                 message,
                 feedback.corrected,
                 json.dumps([m.model_dump() for m in feedback.mistakes]),
+                feedback.rephrased,
             ),
         ).fetchall()
     return FeedbackEntry(
@@ -186,6 +208,24 @@ async def transcribe_upload(audio: UploadFile) -> str:
             os.unlink(file_path)
 
 
+async def synthesize(
+    text: str, voice: str = "alloy", instructions: str | None = None
+) -> str:
+    """Speaks the text; returns base64-encoded MP3."""
+    options = {"instructions": instructions} if instructions else {}
+    try:
+        speech = await client.audio.speech.create(
+            model="gpt-4o-mini-tts",
+            voice=voice,
+            input=text,
+            response_format="mp3",
+            **options,
+        )
+    except Exception as error:
+        raise HTTPException(status_code=502, detail="Speech generation failed") from error
+    return base64.b64encode(speech.content).decode()
+
+
 async def generate_reply(history: list[Message]) -> Reply:
     completion = await client.chat.completions.create(
         model="gpt-4.1-mini",
@@ -196,21 +236,7 @@ async def generate_reply(history: list[Message]) -> Reply:
     )
 
     response = completion.choices[0].message.content or ""
-
-    try:
-        speech = await client.audio.speech.create(
-            model="gpt-4o-mini-tts",
-            voice="alloy",
-            input=response,
-            response_format="mp3",
-        )
-    except Exception as error:
-        raise HTTPException(status_code=502, detail="Speech generation failed") from error
-
-    return Reply(
-        response=response,
-        audio_base64=base64.b64encode(speech.content).decode(),
-    )
+    return Reply(response=response, audio_base64=await synthesize(response))
 
 
 async def coach(conversation_id: str, conversation: list[Message]) -> FeedbackEntry:
@@ -289,6 +315,20 @@ async def respond(request: RespondRequest) -> RespondResponse:
     )
 
 
+@app.post("/speak", response_model=SpeakResponse)
+async def speak(request: SpeakRequest) -> SpeakResponse:
+    """Reads a tutor sentence aloud in Ila's voice so the learner can hear how it sounds."""
+    if not request.text.strip():
+        raise HTTPException(status_code=400, detail="Text to speak is required")
+    audio = await synthesize(
+        request.text,
+        voice="coral",
+        instructions="You are Ila, a warm, friendly 30-year-old woman and English tutor."
+        " Speak slowly and clearly, modelling natural pronunciation for a learner.",
+    )
+    return SpeakResponse(audio_base64=audio)
+
+
 @app.post("/conversations/{conversation_id}/feedback", response_model=FeedbackEntry)
 async def create_feedback(conversation_id: str, request: FeedbackRequest) -> FeedbackEntry:
     latest = next((m for m in reversed(request.messages) if m.role == "user"), None)
@@ -303,7 +343,7 @@ async def create_feedback(conversation_id: str, request: FeedbackRequest) -> Fee
 def list_feedback(conversation_id: str) -> list[FeedbackEntry]:
     with closing(connect()) as conn:
         rows = conn.execute(
-            "SELECT id, message, corrected, mistakes, created_at FROM feedback"
+            "SELECT id, message, corrected, mistakes, rephrased, created_at FROM feedback"
             " WHERE conversation_id = ? ORDER BY id",
             (conversation_id,),
         ).fetchall()

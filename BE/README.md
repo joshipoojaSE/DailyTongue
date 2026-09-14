@@ -54,14 +54,25 @@ turns to keep the conversation together.
 
 ## Tutor feedback
 
-A silent tutor agent reads the whole conversation (learner and Kai) and corrects the
-learner's latest message. Kai never sees its feedback. Call it after `/respond` returns,
+Ila, a silent tutor agent (a warm 30-year-old English tutor), reads the whole conversation
+(learner and Kai), corrects the
+learner's latest message, and suggests a more natural way to rephrase it (even when it has
+no mistakes). Kai never sees its feedback. Call it after `/respond` returns,
 passing the conversation including Kai's reply:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/conversations/<conversation_id>/feedback ^
   -H "Content-Type: application/json" ^
   -d "{\"messages\": [{\"role\": \"user\", \"content\": \"yesterday I go to market\"}, {\"role\": \"assistant\", \"content\": \"Nice! What did you buy?\"}]}"
+```
+
+To hear a tutor sentence, send it to `/speak`. It returns `{ "audio_base64": "..." }` (MP3),
+read slowly and clearly in Ila's voice:
+
+```bash
+curl -X POST http://127.0.0.1:8000/speak ^
+  -H "Content-Type: application/json" ^
+  -d "{\"text\": \"Yesterday I went to the market.\"}"
 ```
 
 `/chat` runs the tutor itself and includes the result as `feedback`, which is `null` if the
@@ -92,6 +103,7 @@ curl http://127.0.0.1:8000/conversations/<conversation_id>/feedback
         "explanation": "Use \"the\" before a specific place like the market."
       }
     ],
+    "rephrased": "I popped over to the market yesterday.",
     "created_at": "2026-09-13 10:12:04"
   }
 ]
