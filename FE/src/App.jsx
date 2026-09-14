@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { getReply, transcribeAudio } from "./api.js";
+import { Fragment, useEffect, useRef, useState } from "react";
+import { getFeedback, getReply, transcribeAudio } from "./api.js";
 import { SILENCE_MS, useRecorder } from "./useRecorder.js";
 
 let nextId = 1;
@@ -26,6 +26,45 @@ function Dots() {
   );
 }
 
+// The tutor's note on one of the user's messages:
+// { status: "pending" | "done" | "error", data? }.
+function Feedback({ feedback }) {
+  const { status, data } = feedback;
+  const correct = status === "done" && data.mistakes.length === 0;
+
+  let body;
+  if (status === "pending") {
+    body = <Dots />;
+  } else if (status === "error") {
+    body = <p>Couldn't check this message.</p>;
+  } else if (correct) {
+    body = <p>Perfect English. Nicely said!</p>;
+  } else {
+    body = (
+      <>
+        <p>
+          Try saying: <strong>{data.corrected}</strong>
+        </p>
+        <ul className="mistakes">
+          {data.mistakes.map((m, i) => (
+            <li key={i}>
+              <s>{m.original}</s> → <strong>{m.correction}</strong>
+              <span className="why">{m.explanation}</span>
+            </li>
+          ))}
+        </ul>
+      </>
+    );
+  }
+
+  return (
+    <div className={`feedback ${correct ? "correct" : ""}`}>
+      <span className="role">Tutor</span>
+      {body}
+    </div>
+  );
+}
+
 export default function App() {
   const [messages, setMessages] = useState([]);
   // null | "transcribing" | "thinking"
@@ -36,6 +75,8 @@ export default function App() {
     onSilence: finishRecording,
   });
   const bottomRef = useRef(null);
+  // Assigned by the server on the first reply; groups the tutor's feedback.
+  const conversationIdRef = useRef(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -45,7 +86,19 @@ export default function App() {
     setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, ...changes } : m)));
   }
 
-  async function reply(text) {
+  // The tutor checks the user's message once Kai has replied, so it sees both
+  // sides of the conversation; its note appears under that message.
+  async function checkEnglish(userId, conversationId, conversation) {
+    updateMessage(userId, { feedback: { status: "pending" } });
+    try {
+      const data = await getFeedback(conversationId, conversation);
+      updateMessage(userId, { feedback: { status: "done", data } });
+    } catch {
+      updateMessage(userId, { feedback: { status: "error" } });
+    }
+  }
+
+  async function reply(userId, text) {
     setStage("thinking");
 
     // Earlier turns plus the new user message. `messages` is this render's
@@ -58,7 +111,8 @@ export default function App() {
     ];
 
     try {
-      const data = await getReply(history);
+      const data = await getReply(history, conversationIdRef.current);
+      conversationIdRef.current = data.conversation_id;
       setMessages((prev) => [
         ...prev,
         {
@@ -67,6 +121,10 @@ export default function App() {
           text: data.response,
           audioSrc: mp3Url(data.audio_base64),
         },
+      ]);
+      checkEnglish(userId, data.conversation_id, [
+        ...history,
+        { role: "assistant", content: data.response },
       ]);
     } catch (err) {
       setError(err.message || "Something went wrong");
@@ -101,7 +159,7 @@ export default function App() {
     }
 
     updateMessage(userId, { text: transcript, pending: false });
-    await reply(transcript);
+    await reply(userId, transcript);
   }
 
   function submitText(e) {
@@ -111,8 +169,9 @@ export default function App() {
 
     setError("");
     setDraft("");
-    setMessages((prev) => [...prev, { id: nextId++, role: "user", text }]);
-    reply(text);
+    const userId = nextId++;
+    setMessages((prev) => [...prev, { id: userId, role: "user", text }]);
+    reply(userId, text);
   }
 
   async function finishRecording() {
@@ -155,13 +214,16 @@ export default function App() {
           )}
 
           {messages.map((m) => (
-            <div key={m.id} className={`bubble ${m.role}`}>
-              <span className="role">{m.role === "user" ? "You" : "Kai"}</span>
-              {m.pending ? <Dots /> : <p>{m.text}</p>}
-              {m.audioSrc && (
-                <audio controls src={m.audioSrc} autoPlay />
-              )}
-            </div>
+            <Fragment key={m.id}>
+              <div className={`bubble ${m.role}`}>
+                <span className="role">{m.role === "user" ? "You" : "Kai"}</span>
+                {m.pending ? <Dots /> : <p>{m.text}</p>}
+                {m.audioSrc && (
+                  <audio controls src={m.audioSrc} autoPlay />
+                )}
+              </div>
+              {m.feedback && <Feedback feedback={m.feedback} />}
+            </Fragment>
           ))}
 
           {stage === "thinking" && (

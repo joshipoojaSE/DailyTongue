@@ -26,10 +26,23 @@ export function transcribeAudio(blob, filename) {
 
 /**
  * Sends the conversation so far ([{ role, content }], ending with the user's
- * latest message); resolves to { response, audio_base64 }.
+ * latest message); resolves to { response, audio_base64, conversation_id }.
+ * Pass null as conversationId on the first turn; the server assigns one.
  */
-export function getReply(messages) {
+export function getReply(messages, conversationId) {
   return request("/respond", {
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ messages, conversation_id: conversationId }),
+  });
+}
+
+/**
+ * Asks the tutor to check the user's latest message in the conversation
+ * ([{ role, content }], which may end with Kai's reply); resolves to
+ * { id, message, corrected, mistakes: [{ original, correction, explanation }], created_at }.
+ */
+export function getFeedback(conversationId, messages) {
+  return request(`/conversations/${encodeURIComponent(conversationId)}/feedback`, {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ messages }),
   });

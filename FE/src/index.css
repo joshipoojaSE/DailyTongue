@@ -107,7 +107,8 @@ body {
   white-space: pre-wrap;
 }
 
-.bubble .role {
+.bubble .role,
+.feedback .role {
   font-size: 0.75rem;
   font-weight: 700;
   opacity: 0.75;
@@ -136,6 +137,49 @@ body {
   max-width: 100%;
   margin-top: 8px;
   height: 36px;
+}
+
+/* The tutor's note, tucked under the user message it corrects. */
+.feedback {
+  align-self: flex-end;
+  max-width: 80%;
+  margin-top: -6px;
+  padding: 8px 16px 10px;
+  border-radius: 16px;
+  background: #fff8e6;
+  border: 2px solid #f6e2b0;
+  color: #6b5317;
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+.feedback.correct {
+  background: #eaf8f0;
+  border-color: #bfe8d0;
+  color: #25734b;
+}
+
+.feedback p {
+  margin: 2px 0 0;
+}
+
+.mistakes {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.mistakes li + li {
+  margin-top: 4px;
+}
+
+.mistakes s {
+  opacity: 0.7;
+}
+
+.mistakes .why {
+  display: block;
+  font-size: 0.88rem;
+  opacity: 0.85;
 }
 
 .dots {
@@ -351,7 +395,8 @@ button:disabled {
     font-size: 1.6rem;
   }
 
-  .bubble {
+  .bubble,
+  .feedback {
     max-width: 92%;
   }
 

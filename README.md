@@ -16,6 +16,16 @@ Microphone ──► FE ──POST /transcribe──► BE ──► gpt-4o-mini
 
 The frontend makes two requests so it can show your transcript before the reply is ready. The backend also offers `POST /chat`, which does both steps in one request.
 
+### Agents
+
+| Agent | Role | Sees |
+| ----- | ---- | ---- |
+| **User** | The learner, chatting normally | Their own conversation with Kai |
+| **Tutor** | Silent observer and English coach. Corrects every message the learner sends and stores the feedback in the database | The full conversation between the learner and Kai (both sides) |
+| **Kai** | Conversational partner with general knowledge | Only its own conversation with the learner |
+
+Once Kai's reply arrives, the frontend sends the conversation, including that reply, to `POST /conversations/{conversation_id}/feedback`. The tutor corrects the learner's latest message and saves the feedback in SQLite, and the frontend shows it in a small **Tutor** note under that message. The tutor never slows down Kai's reply or speaks in the chat, and Kai never sees its feedback. `GET /conversations/{conversation_id}/feedback` lists all feedback for a conversation.
+
 ## Prerequisites
 
 - Python 3.10+
@@ -64,16 +74,19 @@ During development, Vite proxies `/api/*` to the backend, so you don't need to s
 | Method | Path          | Body                        | Returns                                    |
 | ------ | ------------- | --------------------------- | ------------------------------------------ |
 | POST   | `/transcribe` | multipart form, `audio` file | `{ transcript }`                           |
-| POST   | `/respond`    | JSON `{ "messages": [{ "role", "content" }] }` | `{ response, audio_base64 }` |
-| POST   | `/chat`       | multipart form, `audio` file | `{ transcript, response, audio_base64 }`   |
+| POST   | `/respond`    | JSON `{ "messages": [{ "role", "content" }], "conversation_id"? }` | `{ response, audio_base64, conversation_id }` |
+| POST   | `/chat`       | multipart form, `audio` file, optional `conversation_id` | `{ transcript, response, audio_base64, conversation_id, feedback }` |
+| POST   | `/conversations/{conversation_id}/feedback` | JSON `{ "messages": [{ "role", "content" }] }` | `{ id, message, corrected, mistakes: [{ original, correction, explanation }], created_at }` |
+| GET    | `/conversations/{conversation_id}/feedback` | — | A list of the feedback objects above, oldest first |
 
-`audio_base64` holds MP3 audio. The API accepts common audio formats such as WAV, MP3, M4A, and WEBM. Interactive docs are at http://127.0.0.1:8000/docs while the server is running.
+Omit `conversation_id` to start a new conversation; send back the returned one on later turns. `audio_base64` holds MP3 audio. The API accepts common audio formats such as WAV, MP3, M4A, and WEBM. Interactive docs are at http://127.0.0.1:8000/docs while the server is running.
 
 ## Configuration
 
 | Variable          | Where      | Purpose                                                               |
 | ----------------- | ---------- | --------------------------------------------------------------------- |
 | `OPENAI_API_KEY`  | `BE/.env`  | OpenAI API key (required)                                             |
+| `DATABASE_PATH`   | `BE/.env`  | SQLite file for tutor feedback (default `BE/dailytongue.db`)          |
 | `VITE_API_TARGET` | FE (dev)   | Backend URL for the dev proxy (default `http://127.0.0.1:8000`)        |
 | `VITE_API_BASE`   | FE (build) | API URL for a production build hosted separately from the backend    |
 
