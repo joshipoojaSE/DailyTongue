@@ -6,6 +6,9 @@ Record from your microphone. The app sends the recording to `POST /transcribe` a
 your transcript as soon as it's ready, then sends that text to `POST /respond` to get the
 agent's reply and play its audio.
 
+The conversation id is kept in `localStorage`. On load the app shows the conversation's latest
+messages from `GET /conversations/{id}/messages`, and loads older ones as you scroll to the top.
+
 ## Setup
 
 ```bash

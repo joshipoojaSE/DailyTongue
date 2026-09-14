@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager, closing
 from typing import Literal
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Response, UploadFile
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
@@ -80,9 +80,14 @@ class Message(BaseModel):
     content: str
 
 
+InputMode = Literal["spoken", "typed"]
+
+
 class RespondRequest(BaseModel):
     messages: list[Message]
     conversation_id: str | None = Field(default=None, max_length=64)
+    # How the learner entered their latest message, shown next to it in history.
+    input: InputMode | None = None
 
 
 class Reply(BaseModel):
@@ -92,6 +97,8 @@ class Reply(BaseModel):
 
 class RespondResponse(Reply):
     conversation_id: str
+    user_message_id: int
+    message_id: int
 
 
 class Mistake(BaseModel):
@@ -114,11 +121,30 @@ class FeedbackEntry(TutorFeedback):
 
 class FeedbackRequest(BaseModel):
     messages: list[Message]
+    # The stored id of the user message being corrected, so history can show the feedback.
+    message_id: int | None = None
 
 
 class ChatResponse(RespondResponse):
     transcript: str
     feedback: FeedbackEntry | None
+
+
+class StoredMessage(BaseModel):
+    id: int
+    role: Literal["user", "assistant"]
+    content: str
+    # Learner messages only; null for Kai and for messages saved without it.
+    input: InputMode | None
+    has_audio: bool
+    feedback: FeedbackEntry | None
+    # UTC, "YYYY-MM-DD HH:MM:SS".
+    created_at: str
+
+
+class MessagePage(BaseModel):
+    messages: list[StoredMessage]
+    has_more: bool
 
 
 class SpeakRequest(BaseModel):
@@ -150,26 +176,94 @@ def init_db() -> None:
             )
             """
         )
-        # Databases created before rephrasing was added lack the column.
+        # Databases created before these columns were added lack them.
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(feedback)")}
         if "rephrased" not in columns:
             conn.execute(
                 "ALTER TABLE feedback ADD COLUMN rephrased TEXT NOT NULL DEFAULT ''"
             )
+        if "message_id" not in columns:
+            conn.execute("ALTER TABLE feedback ADD COLUMN message_id INTEGER")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS feedback_conversation ON feedback (conversation_id)"
         )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS feedback_message ON feedback (message_id)"
+        )
+        # Every message in a conversation, so the frontend can page back through history.
+        # audio holds the MP3 of Kai's replies.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                input TEXT,
+                audio BLOB,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(messages)")}
+        if "input" not in columns:
+            conn.execute("ALTER TABLE messages ADD COLUMN input TEXT")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS messages_conversation"
+            " ON messages (conversation_id, id)"
+        )
+
+
+def row_to_feedback(row: sqlite3.Row) -> FeedbackEntry:
+    return FeedbackEntry(
+        id=row["id"],
+        message=row["message"],
+        corrected=row["corrected"],
+        mistakes=json.loads(row["mistakes"]),
+        rephrased=row["rephrased"],
+        created_at=row["created_at"],
+    )
+
+
+def save_message(
+    conversation_id: str,
+    role: str,
+    content: str,
+    input: InputMode | None = None,
+    audio: bytes | None = None,
+) -> int:
+    with closing(connect()) as conn, conn:
+        (row,) = conn.execute(
+            "INSERT INTO messages (conversation_id, role, content, input, audio)"
+            " VALUES (?, ?, ?, ?, ?) RETURNING id",
+            (conversation_id, role, content, input, audio),
+        ).fetchall()
+    return row["id"]
+
+
+def save_reply(conversation_id: str, reply: Reply) -> int:
+    return save_message(
+        conversation_id,
+        "assistant",
+        reply.response,
+        audio=base64.b64decode(reply.audio_base64),
+    )
 
 
 def save_feedback(
-    conversation_id: str, message: str, feedback: TutorFeedback
+    conversation_id: str,
+    message: str,
+    feedback: TutorFeedback,
+    message_id: int | None = None,
 ) -> FeedbackEntry:
     with closing(connect()) as conn, conn:
         (row,) = conn.execute(
-            "INSERT INTO feedback (conversation_id, message, corrected, mistakes, rephrased)"
-            " VALUES (?, ?, ?, ?, ?) RETURNING id, created_at",
+            "INSERT INTO feedback"
+            " (conversation_id, message_id, message, corrected, mistakes, rephrased)"
+            " VALUES (?, ?, ?, ?, ?, ?) RETURNING id, created_at",
             (
                 conversation_id,
+                message_id,
                 message,
                 feedback.corrected,
                 json.dumps([m.model_dump() for m in feedback.mistakes]),
@@ -239,7 +333,9 @@ async def generate_reply(history: list[Message]) -> Reply:
     return Reply(response=response, audio_base64=await synthesize(response))
 
 
-async def coach(conversation_id: str, conversation: list[Message]) -> FeedbackEntry:
+async def coach(
+    conversation_id: str, conversation: list[Message], message_id: int | None = None
+) -> FeedbackEntry:
     """Corrects the learner's latest message in the conversation and stores the feedback."""
     message = next(m.content for m in reversed(conversation) if m.role == "user")
     transcript = "\n".join(
@@ -265,7 +361,7 @@ async def coach(conversation_id: str, conversation: list[Message]) -> FeedbackEn
     feedback = completion.choices[0].message.parsed
     if feedback is None:
         raise HTTPException(status_code=502, detail="Tutor feedback failed")
-    return save_feedback(conversation_id, message, feedback)
+    return save_feedback(conversation_id, message, feedback, message_id)
 
 
 @app.post("/chat", response_model=ChatResponse)
@@ -276,13 +372,16 @@ async def chat(
     transcript = await transcribe_upload(audio)
     conversation_id = conversation_id or uuid.uuid4().hex
     user_message = Message(role="user", content=transcript)
+    user_message_id = save_message(conversation_id, "user", transcript, "spoken")
     reply = await generate_reply([user_message])
+    message_id = save_reply(conversation_id, reply)
 
     # The reply is still useful without feedback, so a tutor failure isn't fatal here.
     try:
         feedback = await coach(
             conversation_id,
             [user_message, Message(role="assistant", content=reply.response)],
+            user_message_id,
         )
     except HTTPException:
         logger.exception("Tutor feedback failed for conversation %s", conversation_id)
@@ -291,6 +390,8 @@ async def chat(
     return ChatResponse(
         transcript=transcript,
         conversation_id=conversation_id,
+        user_message_id=user_message_id,
+        message_id=message_id,
         feedback=feedback,
         **reply.model_dump(),
     )
@@ -308,9 +409,16 @@ async def respond(request: RespondRequest) -> RespondResponse:
         raise HTTPException(
             status_code=400, detail="The last message must be non-empty user text"
         )
+    conversation_id = request.conversation_id or uuid.uuid4().hex
+    # Saved before replying, so the learner's message stays in history even if Kai fails.
+    user_message_id = save_message(
+        conversation_id, "user", messages[-1].content, request.input
+    )
     reply = await generate_reply(messages)
     return RespondResponse(
-        conversation_id=request.conversation_id or uuid.uuid4().hex,
+        conversation_id=conversation_id,
+        user_message_id=user_message_id,
+        message_id=save_reply(conversation_id, reply),
         **reply.model_dump(),
     )
 
@@ -336,7 +444,7 @@ async def create_feedback(conversation_id: str, request: FeedbackRequest) -> Fee
         raise HTTPException(
             status_code=400, detail="The conversation must include non-empty user text"
         )
-    return await coach(conversation_id, request.messages)
+    return await coach(conversation_id, request.messages, request.message_id)
 
 
 @app.get("/conversations/{conversation_id}/feedback", response_model=list[FeedbackEntry])
@@ -347,7 +455,62 @@ def list_feedback(conversation_id: str) -> list[FeedbackEntry]:
             " WHERE conversation_id = ? ORDER BY id",
             (conversation_id,),
         ).fetchall()
-    return [
-        FeedbackEntry(**{**dict(row), "mistakes": json.loads(row["mistakes"])})
-        for row in rows
-    ]
+    return [row_to_feedback(row) for row in rows]
+
+
+@app.get("/conversations/{conversation_id}/messages", response_model=MessagePage)
+def list_messages(
+    conversation_id: str,
+    before: int | None = Query(default=None, description="Only messages older than this id"),
+    limit: int = Query(default=30, ge=1, le=100),
+) -> MessagePage:
+    """The newest `limit` messages (older than `before`, if given), oldest first."""
+    with closing(connect()) as conn:
+        rows = conn.execute(
+            "SELECT id, role, content, input, audio IS NOT NULL AS has_audio, created_at"
+            " FROM messages WHERE conversation_id = ? AND (? IS NULL OR id < ?)"
+            " ORDER BY id DESC LIMIT ?",
+            (conversation_id, before, before, limit + 1),
+        ).fetchall()
+        has_more = len(rows) > limit
+        rows = rows[:limit][::-1]
+
+        ids = [row["id"] for row in rows if row["role"] == "user"]
+        placeholders = ",".join("?" * len(ids))
+        # If a message was checked more than once, the latest feedback wins.
+        feedback = {
+            row["message_id"]: row_to_feedback(row)
+            for row in conn.execute(
+                "SELECT id, message_id, message, corrected, mistakes, rephrased, created_at"
+                f" FROM feedback WHERE message_id IN ({placeholders}) ORDER BY id",
+                ids,
+            )
+        }
+
+    return MessagePage(
+        messages=[
+            StoredMessage(
+                id=row["id"],
+                role=row["role"],
+                content=row["content"],
+                input=row["input"],
+                has_audio=bool(row["has_audio"]),
+                feedback=feedback.get(row["id"]),
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ],
+        has_more=has_more,
+    )
+
+
+@app.get("/messages/{message_id}/audio")
+def message_audio(message_id: int) -> Response:
+    """The MP3 of one of Kai's stored replies."""
+    with closing(connect()) as conn:
+        row = conn.execute(
+            "SELECT audio FROM messages WHERE id = ?", (message_id,)
+        ).fetchone()
+    if row is None or row["audio"] is None:
+        raise HTTPException(status_code=404, detail="No audio for this message")
+    return Response(content=row["audio"], media_type="audio/mpeg")

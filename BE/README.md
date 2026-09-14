@@ -50,7 +50,37 @@ curl -X POST http://127.0.0.1:8000/respond ^
 The server sends only the last 20 messages to the model.
 
 The response also includes a `conversation_id`. Send it back as `"conversation_id"` on later
-turns to keep the conversation together.
+turns to keep the conversation together. Optionally send `"input": "spoken"` or `"typed"` to
+record how the learner entered their message. The learner's message and Kai's reply (with its
+audio) are saved; their ids come back as `user_message_id` and `message_id`.
+
+## History
+
+Page back through a conversation, newest page first. Each page is oldest first, with the tutor
+feedback for each learner message:
+
+```bash
+# The latest 30 messages
+curl http://127.0.0.1:8000/conversations/<conversation_id>/messages
+
+# The 30 before message 120
+curl "http://127.0.0.1:8000/conversations/<conversation_id>/messages?before=120&limit=30"
+```
+
+```json
+{
+  "messages": [
+    { "id": 118, "role": "user", "content": "yesterday I go to market", "input": "spoken", "has_audio": false, "feedback": { "...": "..." }, "created_at": "2026-09-13 10:12:01" },
+    { "id": 119, "role": "assistant", "content": "Nice! What did you buy?", "input": null, "has_audio": true, "feedback": null, "created_at": "2026-09-13 10:12:03" }
+  ],
+  "has_more": true
+}
+```
+
+`created_at` is UTC. `input` is `"spoken"` or `"typed"` for learner messages (`/chat` always
+records `"spoken"`), and `null` for Kai or when it wasn't sent.
+
+`GET /messages/<message_id>/audio` returns the MP3 of a stored reply.
 
 ## Tutor feedback
 
@@ -58,7 +88,8 @@ Ila, a silent tutor agent (a warm 30-year-old English tutor), reads the whole co
 (learner and Kai), corrects the
 learner's latest message, and suggests a more natural way to rephrase it (even when it has
 no mistakes). Kai never sees its feedback. Call it after `/respond` returns,
-passing the conversation including Kai's reply:
+passing the conversation including Kai's reply, and optionally the learner message's
+`message_id` from `/respond` so the feedback appears with it in history:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/conversations/<conversation_id>/feedback ^
@@ -78,7 +109,8 @@ curl -X POST http://127.0.0.1:8000/speak ^
 `/chat` runs the tutor itself and includes the result as `feedback`, which is `null` if the
 tutor failed.
 
-Feedback is stored in SQLite at `dailytongue.db`; set `DATABASE_PATH` to use a different file.
+Messages and feedback are stored in SQLite at `dailytongue.db`; set `DATABASE_PATH` to use a
+different file.
 To list everything for a conversation:
 
 ```bash

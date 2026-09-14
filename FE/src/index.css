@@ -87,6 +87,30 @@ body {
   gap: 14px;
 }
 
+/* Top of the chat: loads earlier messages as it scrolls into view. Its height
+   stays the same while loading, so the messages below don't shift. */
+.history {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 1.6rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.history p {
+  margin: 0;
+}
+
+.history button {
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-weight: 700;
+}
+
 .empty {
   margin: auto;
   color: var(--muted);
@@ -95,8 +119,54 @@ body {
   text-align: center;
 }
 
-.bubble {
+/* A message with its "You · typed · 10:11" line above the bubble. */
+.message {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   max-width: 80%;
+}
+
+.message.user {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+
+.message.assistant {
+  align-self: flex-start;
+  align-items: flex-start;
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding-inline: 6px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.meta svg {
+  flex-shrink: 0;
+}
+
+/* "Today", "Yesterday" or "Tue 8 Sept" where the day changes. */
+.day {
+  align-self: center;
+  margin-block: 6px;
+  padding: 5px 20px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  box-shadow: 0 3px 0 var(--ledge);
+  font-family: "Fredoka", "Nunito", "Segoe UI", system-ui, sans-serif;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #6b4a58;
+}
+
+.bubble {
   padding: 10px 16px;
   border-radius: 20px;
   line-height: 1.5;
@@ -107,7 +177,6 @@ body {
   white-space: pre-wrap;
 }
 
-.bubble .role,
 .feedback .role {
   font-size: 0.75rem;
   font-weight: 700;
@@ -115,7 +184,6 @@ body {
 }
 
 .bubble.user {
-  align-self: flex-end;
   background: var(--accent);
   color: #fff;
   border-bottom-right-radius: 6px;
@@ -123,7 +191,6 @@ body {
 }
 
 .bubble.assistant {
-  align-self: flex-start;
   background: var(--surface);
   border: 2px solid var(--border);
   border-bottom-left-radius: 6px;
@@ -445,7 +512,7 @@ button:disabled {
     font-size: 1.6rem;
   }
 
-  .bubble,
+  .message,
   .feedback {
     max-width: 92%;
   }
