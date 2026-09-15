@@ -82,6 +82,30 @@ records `"spoken"`), and `null` for Kai or when it wasn't sent.
 
 `GET /messages/<message_id>/audio` returns the MP3 of a stored reply.
 
+## Daily goal
+
+Learners aim to talk with Kai for 60 minutes a day (`DAILY_GOAL_MINUTES`). Days run from
+midnight to midnight IST. A day's time is the time between its consecutive messages in the
+conversation; gaps longer than 5 minutes (`IDLE_GAP`) count as a break and are skipped.
+
+Get the minutes for each of the last `days` days (1–366, default 7), oldest first, ending today:
+
+```bash
+curl "http://127.0.0.1:8000/conversations/<conversation_id>/progress?days=7"
+```
+
+```json
+{
+  "goal_minutes": 60,
+  "days": [
+    { "date": "2026-09-09", "minutes": 0 },
+    { "date": "2026-09-10", "minutes": 72 },
+    "...",
+    { "date": "2026-09-15", "minutes": 42 }
+  ]
+}
+```
+
 ## Tutor feedback
 
 Ila, a silent tutor agent (a warm 30-year-old English tutor), reads the whole conversation

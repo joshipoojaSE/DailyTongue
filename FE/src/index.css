@@ -61,6 +61,9 @@ body {
 }
 
 .logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   margin: 0;
   font-family: "Fredoka", "Nunito", "Segoe UI", system-ui, sans-serif;
   font-size: 1.85rem;
@@ -70,13 +73,442 @@ body {
   color: var(--ink);
 }
 
-.logo span {
+.logo-text span {
   color: var(--accent);
+}
+
+/* "12 of 60 min today" beside the logo, with a ring that fills towards the goal. */
+.goal {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 22px 6px 6px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  border: 2px solid #ffd3dd;
+  text-align: left;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.goal:hover {
+  border-color: #ffb3c4;
+}
+
+/* Open while the dashboard shows. */
+.goal.open {
+  border-color: var(--accent);
+  box-shadow: 0 3px 0 #ffc4d1;
+}
+
+.goal:focus-visible,
+.back:focus-visible,
+.range button:focus-visible,
+.chart:focus-visible {
+  outline: 3px solid #ffb3c4;
+  outline-offset: 3px;
+}
+
+.goal-ring {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  flex-shrink: 0;
+}
+
+.goal-progress {
+  position: absolute;
+  inset: 0;
+}
+
+.goal-progress circle {
+  fill: none;
+  stroke-width: 6;
+}
+
+.goal-track {
+  stroke: #ffdbe3;
+}
+
+.goal-fill {
+  stroke: var(--accent);
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.6s ease;
+}
+
+/* The mascot sits on a pale disc centred inside the ring. */
+.goal-face {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  padding-top: 2px;
+  border-radius: 50%;
+  background: #ffe2e9;
+}
+
+.goal .tongue--happy .tongue-body {
+  animation-iteration-count: 2;
+}
+
+.goal-text > span {
+  display: block;
+}
+
+.goal-title {
+  font-family: "Fredoka", "Nunito", "Segoe UI", system-ui, sans-serif;
+  font-size: 1.3rem;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--ink);
+}
+
+.goal-title span {
+  color: var(--accent);
+}
+
+.goal-hint {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--muted);
+  text-wrap: balance;
+}
+
+.goal.met .goal-hint {
+  color: #25734b;
 }
 
 .chat {
   flex: 1;
   overflow-y: auto;
+}
+
+/* The practice dashboard (Dashboard.jsx), shown in place of the chat. */
+.dashboard {
+  flex: 1;
+  overflow-y: auto;
+  /* Chart bars: pink on goal days, a step deeper than --accent (which is under 3:1 against
+     the white card), and a quiet mauve-gray on the rest. */
+  --bar-met: #f7507a;
+  --bar-met-active: var(--accent-ledge);
+  --bar-below: #d2c1c7;
+  --bar-below-active: #b9a5ac;
+}
+
+.dashboard-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-block: 18px 32px;
+}
+
+.back {
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px 6px 10px;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--accent-ledge);
+  font-weight: 800;
+}
+
+.back:hover {
+  background: var(--accent-soft);
+}
+
+.dashboard-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dashboard-heading h2 {
+  margin: 0;
+  font-family: "Fredoka", "Nunito", "Segoe UI", system-ui, sans-serif;
+  font-size: 1.7rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/* 7 / 30 / 90 days. */
+.range {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+}
+
+.range button {
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 800;
+  font-size: 0.9rem;
+}
+
+.range button:hover {
+  color: var(--text);
+}
+
+.range button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent-ledge);
+}
+
+/* The previous report stays in place, dimmed, while another range loads. */
+.report {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  transition: opacity 0.15s;
+}
+
+.report.refreshing {
+  opacity: 0.5;
+}
+
+.retry {
+  margin-left: auto;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--danger);
+  font-weight: 800;
+}
+
+.empty .retry {
+  margin: 0;
+  background: var(--danger-bg);
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
+.stat,
+.card {
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-radius: 18px;
+  box-shadow: 0 3px 0 var(--ledge);
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 12px 16px;
+}
+
+.stat-label {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.stat-value {
+  font-size: 1.6rem;
+  font-weight: 800;
+  line-height: 1.2;
+  color: var(--ink);
+}
+
+.stat-detail {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.card {
+  padding: 14px 18px 16px;
+}
+
+.card h3 {
+  margin: 0 0 6px;
+  font-size: 1rem;
+  font-weight: 800;
+  color: var(--ink);
+}
+
+.card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 16px;
+  margin-bottom: 6px;
+}
+
+.card-head h3 {
+  margin: 0;
+}
+
+.legend {
+  display: flex;
+  gap: 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.legend li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  background: var(--bar-below);
+}
+
+.legend-swatch.met {
+  background: var(--bar-met);
+}
+
+.chart {
+  position: relative;
+  border-radius: 8px;
+}
+
+.chart svg {
+  display: block;
+  overflow: visible;
+}
+
+.chart-grid {
+  stroke: #f5e8e2;
+  stroke-width: 1;
+}
+
+.chart-goal {
+  stroke: #b9a0a8;
+  stroke-width: 1;
+}
+
+.chart-tick {
+  fill: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-tick.active {
+  fill: var(--ink);
+}
+
+.chart-goal-label {
+  fill: var(--text);
+  font-size: 11px;
+  font-weight: 800;
+  paint-order: stroke;
+  stroke: var(--surface);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+}
+
+.chart-bar {
+  fill: var(--bar-below);
+}
+
+.chart-bar.active {
+  fill: var(--bar-below-active);
+}
+
+.chart-bar.met {
+  fill: var(--bar-met);
+}
+
+.chart-bar.met.active {
+  fill: var(--bar-met-active);
+}
+
+.chart-tip {
+  position: absolute;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 12px;
+  border-radius: 12px;
+  background: var(--ink);
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translate(-50%, calc(-100% - 10px));
+}
+
+.chart-tip strong {
+  font-size: 1rem;
+  font-weight: 800;
+}
+
+.chart-tip span {
+  opacity: 0.8;
+}
+
+.day-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.day-list li {
+  display: grid;
+  grid-template-columns: 1fr 6.5rem 6rem;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 0;
+  border-top: 1px solid #f5e8e2;
+}
+
+.day-list li:first-child {
+  border-top: none;
+}
+
+.day-list-name {
+  font-weight: 700;
+  color: var(--text);
+}
+
+.day-list-time {
+  text-align: right;
+  font-weight: 800;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.day-list li.none .day-list-name,
+.day-list li.none .day-list-time {
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.day-list-goal {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.85rem;
+  font-weight: 800;
+  color: #25734b;
 }
 
 .chat-inner {
@@ -100,6 +532,9 @@ body {
 }
 
 .history p {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin: 0;
 }
 
@@ -113,10 +548,18 @@ body {
 
 .empty {
   margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
   color: var(--muted);
   font-size: 1.05rem;
   font-weight: 600;
   text-align: center;
+}
+
+.empty p {
+  margin: 0;
 }
 
 /* A message with its "You · typed · 10:11" line above the bubble. */
@@ -178,9 +621,11 @@ body {
 }
 
 .feedback .role {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 0.75rem;
   font-weight: 700;
-  opacity: 0.75;
 }
 
 .bubble.user {
@@ -331,6 +776,9 @@ body {
 }
 
 .error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   background: var(--danger-bg);
   color: var(--danger);
   padding: 10px 16px;
@@ -381,7 +829,15 @@ button:disabled {
 .listening {
   flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   padding-block: 6px;
+}
+
+.listening-body {
+  flex: 1;
+  min-width: 0;
 }
 
 /* Sized to its bars so it sits at the left; when space runs out it clips
@@ -503,6 +959,163 @@ button:disabled {
   box-shadow: 0 1px 0 var(--accent-ledge), 0 0 0 6px #ffd3dd;
 }
 
+/* The tongue mascot (Tongue.jsx). Its body hangs from the top, so it sways
+   around the top centre. */
+.tongue {
+  display: block;
+  flex-shrink: 0;
+  overflow: visible;
+}
+
+.tongue-fill {
+  fill: var(--accent);
+}
+
+.tongue-ledge {
+  fill: var(--accent-ledge);
+}
+
+.tongue-groove {
+  fill: none;
+  stroke: var(--accent-ledge);
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  opacity: 0.5;
+}
+
+.tongue-shine {
+  fill: #fff;
+  opacity: 0.4;
+}
+
+.tongue-blush {
+  fill: #ffb8c7;
+  opacity: 0.85;
+}
+
+.tongue-ink {
+  fill: var(--ink);
+}
+
+.tongue-sparkle {
+  fill: #fff;
+}
+
+.tongue-line {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.tongue-mouth {
+  fill: #7a1f3a;
+}
+
+.tongue-glasses {
+  fill: rgba(255, 255, 255, 0.25);
+  stroke: var(--ink);
+  stroke-width: 1.8;
+}
+
+.tongue-body {
+  transform-box: view-box;
+  transform-origin: 32px 8px;
+}
+
+.tongue--idle .tongue-body {
+  animation: tongue-sway 3.2s ease-in-out infinite;
+}
+
+.tongue--talking .tongue-body {
+  animation: tongue-sway 1.4s ease-in-out infinite;
+}
+
+.tongue--happy .tongue-body {
+  animation: tongue-bounce 1.1s ease-in-out infinite;
+}
+
+.tongue--thinking .tongue-body {
+  animation: tongue-ponder 2.4s ease-in-out infinite;
+}
+
+.tongue--listening .tongue-body {
+  animation: tongue-lean 1.6s ease-in-out infinite;
+}
+
+.tongue--oops .tongue-body {
+  animation: tongue-shake 2.4s ease-in-out infinite;
+}
+
+.tongue-eyes {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: tongue-blink 4.5s infinite;
+}
+
+.tongue--rest .tongue-eyes {
+  animation: none;
+}
+
+.tongue-talk {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: tongue-talk 0.26s ease-in-out infinite alternate;
+}
+
+/* Avatars beside messages celebrate or wobble briefly, then settle, so the
+   history doesn't keep moving. */
+.feedback .tongue--happy .tongue-body,
+.feedback .tongue--oops .tongue-body {
+  animation-iteration-count: 2;
+}
+
+@keyframes tongue-sway {
+  0%, 100% { transform: rotate(-4deg); }
+  50% { transform: rotate(4deg); }
+}
+
+@keyframes tongue-bounce {
+  0%, 100% { transform: translateY(0) rotate(0); }
+  30% { transform: translateY(-5px) rotate(-6deg); }
+  60% { transform: translateY(0) rotate(6deg); }
+}
+
+@keyframes tongue-ponder {
+  0%, 100% { transform: rotate(-9deg); }
+  50% { transform: rotate(-4deg); }
+}
+
+@keyframes tongue-lean {
+  0%, 100% { transform: rotate(0) scale(1); }
+  50% { transform: rotate(3deg) scale(1.04); }
+}
+
+@keyframes tongue-shake {
+  0%, 20%, 100% { transform: translateX(0); }
+  4% { transform: translateX(-2.5px); }
+  8% { transform: translateX(2.5px); }
+  12% { transform: translateX(-2px); }
+  16% { transform: translateX(2px); }
+}
+
+@keyframes tongue-blink {
+  0%, 92%, 100% { transform: scaleY(1); }
+  95% { transform: scaleY(0.1); }
+}
+
+@keyframes tongue-talk {
+  from { transform: scaleY(0.35); }
+  to { transform: scaleY(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tongue * {
+    animation: none !important;
+  }
+}
+
 @media (max-width: 480px) {
   .header-inner {
     padding-block: 24px;
@@ -510,6 +1123,35 @@ button:disabled {
 
   .logo {
     font-size: 1.6rem;
+  }
+
+  .header-inner {
+    flex-wrap: wrap;
+    padding-block: 16px;
+  }
+
+  .goal {
+    padding-right: 16px;
+  }
+
+  .goal-title {
+    font-size: 1.1rem;
+  }
+
+  .stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .stat-value {
+    font-size: 1.35rem;
+  }
+
+  .card {
+    padding-inline: 14px;
+  }
+
+  .day-list li {
+    grid-template-columns: 1fr auto 5.5rem;
   }
 
   .message,

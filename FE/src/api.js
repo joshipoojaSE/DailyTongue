@@ -77,6 +77,17 @@ export async function getMessages(conversationId, before) {
   return parse(res);
 }
 
+/**
+ * Minutes talked with Kai on each of the last `days` days (IST); resolves to
+ * { goal_minutes, days: [{ date: "YYYY-MM-DD", minutes }] }, oldest first, ending today.
+ */
+export async function getProgress(conversationId, days) {
+  const res = await fetch(
+    `${API_BASE}/conversations/${encodeURIComponent(conversationId)}/progress?days=${days}`
+  );
+  return parse(res);
+}
+
 /** URL of the MP3 for one of Kai's stored replies. */
 export function messageAudioUrl(messageId) {
   return `${API_BASE}/messages/${messageId}/audio`;

@@ -6,6 +6,7 @@ import sqlite3
 import tempfile
 import uuid
 from contextlib import asynccontextmanager, closing
+from datetime import datetime, time, timedelta, timezone
 from typing import Literal
 
 from dotenv import load_dotenv
@@ -69,6 +70,14 @@ SPEAKERS = {"user": "Learner", "assistant": "Kai"}
 
 # Only the most recent turns are sent to the model, to bound prompt size.
 MAX_HISTORY_MESSAGES = 20
+
+# Learners aim to talk with Kai for this many minutes each day.
+DAILY_GOAL_MINUTES = 60
+# A longer gap between messages means the learner stepped away, so it isn't counted.
+IDLE_GAP = timedelta(minutes=5)
+# Days start at midnight India Standard Time, as in the frontend. IST has no daylight saving.
+IST = timezone(timedelta(hours=5, minutes=30))
+SERVER_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 class TranscribeResponse(BaseModel):
@@ -145,6 +154,18 @@ class StoredMessage(BaseModel):
 class MessagePage(BaseModel):
     messages: list[StoredMessage]
     has_more: bool
+
+
+class DayProgress(BaseModel):
+    # A calendar day in IST, "YYYY-MM-DD".
+    date: str
+    minutes: int
+
+
+class Progress(BaseModel):
+    goal_minutes: int
+    # Oldest first, ending with today.
+    days: list[DayProgress]
 
 
 class SpeakRequest(BaseModel):
@@ -501,6 +522,48 @@ def list_messages(
             for row in rows
         ],
         has_more=has_more,
+    )
+
+
+@app.get("/conversations/{conversation_id}/progress", response_model=Progress)
+def practice_progress(
+    conversation_id: str,
+    days: int = Query(default=7, ge=1, le=366, description="How many days, ending today"),
+) -> Progress:
+    """Minutes spent talking with Kai on each of the last `days` days (IST). A day's time is
+    the time between its consecutive messages, skipping gaps longer than IDLE_GAP."""
+    first_day = datetime.now(IST).date() - timedelta(days=days - 1)
+    since = (
+        datetime.combine(first_day, time(), IST)
+        .astimezone(timezone.utc)
+        .strftime(SERVER_TIME_FORMAT)
+    )
+    with closing(connect()) as conn:
+        rows = conn.execute(
+            "SELECT created_at FROM messages"
+            " WHERE conversation_id = ? AND created_at >= ? ORDER BY id",
+            (conversation_id, since),
+        ).fetchall()
+
+    active = {first_day + timedelta(days=i): timedelta() for i in range(days)}
+    previous = None
+    for row in rows:
+        at = (
+            datetime.strptime(row["created_at"], SERVER_TIME_FORMAT)
+            .replace(tzinfo=timezone.utc)
+            .astimezone(IST)
+        )
+        # A gap across midnight belongs to neither day.
+        if previous and previous.date() == at.date() and at - previous <= IDLE_GAP:
+            active[at.date()] += at - previous
+        previous = at
+
+    return Progress(
+        goal_minutes=DAILY_GOAL_MINUTES,
+        days=[
+            DayProgress(date=day.isoformat(), minutes=int(spent.total_seconds() // 60))
+            for day, spent in active.items()
+        ],
     )
 
 
