@@ -24,11 +24,11 @@ The frontend makes two requests so it can show your transcript before the reply 
 | **Ila** (tutor) | A warm 30-year-old English tutor who silently observes and coaches. Corrects every message the learner sends, suggests a more natural way to rephrase it, and stores the feedback in the database | The full conversation between the learner and Kai (both sides) |
 | **Kai** | Conversational partner with general knowledge | Only its own conversation with the learner |
 
-Once Kai's reply arrives, the frontend sends the conversation, including that reply, to `POST /conversations/{conversation_id}/feedback`. Ila corrects the learner's latest message, suggests another way to say it, and saves the feedback in SQLite, and the frontend shows it in a small **Ila · Tutor** note under that message. A 🔊 button next to the corrected and rephrased sentences reads them aloud in Ila's voice through `POST /speak`, so the learner can hear how they sound. The tutor never slows down Kai's reply or speaks in the chat, and Kai never sees its feedback. `GET /conversations/{conversation_id}/feedback` lists all feedback for a conversation.
+Once Kai's reply arrives, the frontend sends the conversation, including that reply, to `POST /conversations/{conversation_id}/feedback`. Ila corrects the learner's latest message, suggests another way to say it, and saves the feedback in Neon Postgres, and the frontend shows it in a small **Ila · Tutor** note under that message. A 🔊 button next to the corrected and rephrased sentences reads them aloud in Ila's voice through `POST /speak`, so the learner can hear how they sound. The tutor never slows down Kai's reply or speaks in the chat, and Kai never sees its feedback. `GET /conversations/{conversation_id}/feedback` lists all feedback for a conversation.
 
 ### History
 
-`/respond` and `/chat` save every message (and the audio of Kai's replies) in SQLite. The frontend remembers the conversation id in `localStorage`, so after a reload it shows the latest messages from `GET /conversations/{conversation_id}/messages`, and loads older pages (with their tutor notes) as you scroll up.
+`/respond` and `/chat` save every message (and the audio of Kai's replies) in Neon Postgres. The frontend remembers the conversation id in `localStorage`, so after a reload it shows the latest messages from `GET /conversations/{conversation_id}/messages`, and loads older pages (with their tutor notes) as you scroll up.
 
 Each message is labelled with who sent it, whether it was spoken or typed, and its time in IST (for example "You · spoken · 19:40"), and a "Today", "Yesterday" or "Tue 8 Sept" divider marks each new day.
 
@@ -53,7 +53,10 @@ Create `BE/.env`:
 
 ```env
 OPENAI_API_KEY=your_api_key
+DATABASE_URL=postgresql://user:password@host.neon.tech/DailyTongue?sslmode=require
 ```
+
+The backend creates its tables in that Neon database on startup if they don't exist.
 
 Start the API on http://127.0.0.1:8000:
 
@@ -95,7 +98,7 @@ Omit `conversation_id` to start a new conversation; send back the returned one o
 | Variable          | Where      | Purpose                                                               |
 | ----------------- | ---------- | --------------------------------------------------------------------- |
 | `OPENAI_API_KEY`  | `BE/.env`  | OpenAI API key (required)                                             |
-| `DATABASE_PATH`   | `BE/.env`  | SQLite file for messages and tutor feedback (default `BE/dailytongue.db`) |
+| `DATABASE_URL`    | `BE/.env`  | Neon Postgres connection string for messages and tutor feedback (required) |
 | `VITE_API_TARGET` | FE (dev)   | Backend URL for the dev proxy (default `http://127.0.0.1:8000`)        |
 | `VITE_API_BASE`   | FE (build) | API URL for a production build hosted separately from the backend    |
 

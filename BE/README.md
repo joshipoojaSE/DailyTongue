@@ -16,7 +16,11 @@ Create a `.env` file:
 
 ```env
 OPENAI_API_KEY=your_api_key
+DATABASE_URL=postgresql://user:password@host.neon.tech/DailyTongue?sslmode=require
 ```
+
+`DATABASE_URL` is the Neon Postgres connection string. The tables are created on
+startup if they don't exist.
 
 ## Run
 
@@ -87,6 +91,8 @@ records `"spoken"`), and `null` for Kai or when it wasn't sent.
 Learners aim to talk with Kai for 60 minutes a day (`DAILY_GOAL_MINUTES`). Days run from
 midnight to midnight IST. A day's time is the time between its consecutive messages in the
 conversation; gaps longer than 5 minutes (`IDLE_GAP`) count as a break and are skipped.
+Each message adds its gap to that day's total in the `practice_time` table as it is saved,
+so progress is read from the database rather than recomputed from every message.
 
 Get the minutes for each of the last `days` days (1–366, default 7), oldest first, ending today:
 
@@ -133,8 +139,8 @@ curl -X POST http://127.0.0.1:8000/speak ^
 `/chat` runs the tutor itself and includes the result as `feedback`, which is `null` if the
 tutor failed.
 
-Messages and feedback are stored in SQLite at `dailytongue.db`; set `DATABASE_PATH` to use a
-different file.
+Messages and feedback are stored in Neon Postgres, in the `messages` and `feedback` tables
+of the database named in `DATABASE_URL`.
 To list everything for a conversation:
 
 ```bash

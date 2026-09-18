@@ -2,31 +2,43 @@ import base64
 import json
 import logging
 import os
-import sqlite3
 import tempfile
 import uuid
-from contextlib import asynccontextmanager, closing
-from datetime import datetime, time, timedelta, timezone
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Query, Response, UploadFile
 from openai import AsyncOpenAI
+from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
 from pydantic import BaseModel, Field
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = os.getenv(
-    "DATABASE_PATH", os.path.join(os.path.dirname(__file__), "dailytongue.db")
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL is required: the Neon Postgres connection string")
+
+# Neon is reached over the network, so connections are pooled and reused.
+pool = ConnectionPool(
+    DATABASE_URL,
+    min_size=1,
+    max_size=10,
+    kwargs={"row_factory": dict_row},
+    open=False,
 )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    pool.open()
     init_db()
     yield
+    pool.close()
 
 
 app = FastAPI(title="DailyTongue API", lifespan=lifespan)
@@ -176,35 +188,22 @@ class SpeakResponse(BaseModel):
     audio_base64: str
 
 
-def connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
 def init_db() -> None:
-    with closing(connect()) as conn, conn:
+    with pool.connection() as conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS feedback (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id BIGSERIAL PRIMARY KEY,
                 conversation_id TEXT NOT NULL,
+                message_id BIGINT,
                 message TEXT NOT NULL,
                 corrected TEXT NOT NULL,
                 mistakes TEXT NOT NULL,
                 rephrased TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )
             """
         )
-        # Databases created before these columns were added lack them.
-        columns = {row["name"] for row in conn.execute("PRAGMA table_info(feedback)")}
-        if "rephrased" not in columns:
-            conn.execute(
-                "ALTER TABLE feedback ADD COLUMN rephrased TEXT NOT NULL DEFAULT ''"
-            )
-        if "message_id" not in columns:
-            conn.execute("ALTER TABLE feedback ADD COLUMN message_id INTEGER")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS feedback_conversation ON feedback (conversation_id)"
         )
@@ -216,33 +215,72 @@ def init_db() -> None:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id BIGSERIAL PRIMARY KEY,
                 conversation_id TEXT NOT NULL,
                 role TEXT NOT NULL,
                 content TEXT NOT NULL,
                 input TEXT,
-                audio BLOB,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                audio BYTEA,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )
             """
         )
-        columns = {row["name"] for row in conn.execute("PRAGMA table_info(messages)")}
-        if "input" not in columns:
-            conn.execute("ALTER TABLE messages ADD COLUMN input TEXT")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS messages_conversation"
             " ON messages (conversation_id, id)"
         )
+        # How long the learner practised on each day, kept up to date as messages
+        # are saved, so progress is read rather than recomputed from every message.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS practice_time (
+                conversation_id TEXT NOT NULL,
+                day DATE NOT NULL,
+                seconds INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (conversation_id, day)
+            )
+            """
+        )
 
 
-def row_to_feedback(row: sqlite3.Row) -> FeedbackEntry:
+def utc_text(moment: datetime) -> str:
+    """A stored timestamp in the format the API returns: UTC, "YYYY-MM-DD HH:MM:SS"."""
+    return moment.astimezone(timezone.utc).strftime(SERVER_TIME_FORMAT)
+
+
+def row_to_feedback(row: dict) -> FeedbackEntry:
     return FeedbackEntry(
         id=row["id"],
         message=row["message"],
         corrected=row["corrected"],
         mistakes=json.loads(row["mistakes"]),
         rephrased=row["rephrased"],
-        created_at=row["created_at"],
+        created_at=utc_text(row["created_at"]),
+    )
+
+
+def record_practice_time(conn, conversation_id: str, message_id: int, at: datetime) -> None:
+    """Adds the time since the conversation's previous message to that day's total.
+    A gap longer than IDLE_GAP means the learner stepped away, and a gap across
+    midnight belongs to neither day, so neither is counted."""
+    previous = conn.execute(
+        "SELECT created_at FROM messages WHERE conversation_id = %s AND id < %s"
+        " ORDER BY id DESC LIMIT 1",
+        (conversation_id, message_id),
+    ).fetchone()
+    if previous is None:
+        return
+
+    at = at.astimezone(IST)
+    before = previous["created_at"].astimezone(IST)
+    if before.date() != at.date() or at - before > IDLE_GAP:
+        return
+
+    conn.execute(
+        "INSERT INTO practice_time (conversation_id, day, seconds) VALUES (%s, %s, %s)"
+        " ON CONFLICT (conversation_id, day)"
+        " DO UPDATE SET seconds = practice_time.seconds + EXCLUDED.seconds",
+        (conversation_id, at.date(), round((at - before).total_seconds())),
     )
 
 
@@ -253,12 +291,13 @@ def save_message(
     input: InputMode | None = None,
     audio: bytes | None = None,
 ) -> int:
-    with closing(connect()) as conn, conn:
-        (row,) = conn.execute(
+    with pool.connection() as conn:
+        row = conn.execute(
             "INSERT INTO messages (conversation_id, role, content, input, audio)"
-            " VALUES (?, ?, ?, ?, ?) RETURNING id",
+            " VALUES (%s, %s, %s, %s, %s) RETURNING id, created_at",
             (conversation_id, role, content, input, audio),
-        ).fetchall()
+        ).fetchone()
+        record_practice_time(conn, conversation_id, row["id"], row["created_at"])
     return row["id"]
 
 
@@ -277,11 +316,11 @@ def save_feedback(
     feedback: TutorFeedback,
     message_id: int | None = None,
 ) -> FeedbackEntry:
-    with closing(connect()) as conn, conn:
-        (row,) = conn.execute(
+    with pool.connection() as conn:
+        row = conn.execute(
             "INSERT INTO feedback"
             " (conversation_id, message_id, message, corrected, mistakes, rephrased)"
-            " VALUES (?, ?, ?, ?, ?, ?) RETURNING id, created_at",
+            " VALUES (%s, %s, %s, %s, %s, %s) RETURNING id, created_at",
             (
                 conversation_id,
                 message_id,
@@ -290,9 +329,12 @@ def save_feedback(
                 json.dumps([m.model_dump() for m in feedback.mistakes]),
                 feedback.rephrased,
             ),
-        ).fetchall()
+        ).fetchone()
     return FeedbackEntry(
-        id=row["id"], message=message, created_at=row["created_at"], **feedback.model_dump()
+        id=row["id"],
+        message=message,
+        created_at=utc_text(row["created_at"]),
+        **feedback.model_dump(),
     )
 
 
@@ -377,10 +419,16 @@ async def coach(
             response_format=TutorFeedback,
         )
     except Exception as error:
+        logger.exception("Tutor feedback failed for conversation %s", conversation_id)
         raise HTTPException(status_code=502, detail="Tutor feedback failed") from error
 
     feedback = completion.choices[0].message.parsed
     if feedback is None:
+        logger.error(
+            "Tutor returned no parsed feedback for conversation %s (refusal: %s)",
+            conversation_id,
+            completion.choices[0].message.refusal,
+        )
         raise HTTPException(status_code=502, detail="Tutor feedback failed")
     return save_feedback(conversation_id, message, feedback, message_id)
 
@@ -470,10 +518,10 @@ async def create_feedback(conversation_id: str, request: FeedbackRequest) -> Fee
 
 @app.get("/conversations/{conversation_id}/feedback", response_model=list[FeedbackEntry])
 def list_feedback(conversation_id: str) -> list[FeedbackEntry]:
-    with closing(connect()) as conn:
+    with pool.connection() as conn:
         rows = conn.execute(
             "SELECT id, message, corrected, mistakes, rephrased, created_at FROM feedback"
-            " WHERE conversation_id = ? ORDER BY id",
+            " WHERE conversation_id = %s ORDER BY id",
             (conversation_id,),
         ).fetchall()
     return [row_to_feedback(row) for row in rows]
@@ -486,25 +534,25 @@ def list_messages(
     limit: int = Query(default=30, ge=1, le=100),
 ) -> MessagePage:
     """The newest `limit` messages (older than `before`, if given), oldest first."""
-    with closing(connect()) as conn:
+    with pool.connection() as conn:
         rows = conn.execute(
             "SELECT id, role, content, input, audio IS NOT NULL AS has_audio, created_at"
-            " FROM messages WHERE conversation_id = ? AND (? IS NULL OR id < ?)"
-            " ORDER BY id DESC LIMIT ?",
+            " FROM messages WHERE conversation_id = %s"
+            " AND (%s::bigint IS NULL OR id < %s::bigint)"
+            " ORDER BY id DESC LIMIT %s",
             (conversation_id, before, before, limit + 1),
         ).fetchall()
         has_more = len(rows) > limit
         rows = rows[:limit][::-1]
 
         ids = [row["id"] for row in rows if row["role"] == "user"]
-        placeholders = ",".join("?" * len(ids))
         # If a message was checked more than once, the latest feedback wins.
         feedback = {
             row["message_id"]: row_to_feedback(row)
             for row in conn.execute(
                 "SELECT id, message_id, message, corrected, mistakes, rephrased, created_at"
-                f" FROM feedback WHERE message_id IN ({placeholders}) ORDER BY id",
-                ids,
+                " FROM feedback WHERE message_id = ANY(%s::bigint[]) ORDER BY id",
+                (ids,),
             )
         }
 
@@ -517,7 +565,7 @@ def list_messages(
                 input=row["input"],
                 has_audio=bool(row["has_audio"]),
                 feedback=feedback.get(row["id"]),
-                created_at=row["created_at"],
+                created_at=utc_text(row["created_at"]),
             )
             for row in rows
         ],
@@ -530,39 +578,22 @@ def practice_progress(
     conversation_id: str,
     days: int = Query(default=7, ge=1, le=366, description="How many days, ending today"),
 ) -> Progress:
-    """Minutes spent talking with Kai on each of the last `days` days (IST). A day's time is
-    the time between its consecutive messages, skipping gaps longer than IDLE_GAP."""
+    """Minutes spent talking with Kai on each of the last `days` days (IST), as recorded
+    by record_practice_time when each message was saved."""
     first_day = datetime.now(IST).date() - timedelta(days=days - 1)
-    since = (
-        datetime.combine(first_day, time(), IST)
-        .astimezone(timezone.utc)
-        .strftime(SERVER_TIME_FORMAT)
-    )
-    with closing(connect()) as conn:
+    with pool.connection() as conn:
         rows = conn.execute(
-            "SELECT created_at FROM messages"
-            " WHERE conversation_id = ? AND created_at >= ? ORDER BY id",
-            (conversation_id, since),
+            "SELECT day, seconds FROM practice_time"
+            " WHERE conversation_id = %s AND day >= %s",
+            (conversation_id, first_day),
         ).fetchall()
 
-    active = {first_day + timedelta(days=i): timedelta() for i in range(days)}
-    previous = None
-    for row in rows:
-        at = (
-            datetime.strptime(row["created_at"], SERVER_TIME_FORMAT)
-            .replace(tzinfo=timezone.utc)
-            .astimezone(IST)
-        )
-        # A gap across midnight belongs to neither day.
-        if previous and previous.date() == at.date() and at - previous <= IDLE_GAP:
-            active[at.date()] += at - previous
-        previous = at
-
+    active = {row["day"]: row["seconds"] for row in rows}
     return Progress(
         goal_minutes=DAILY_GOAL_MINUTES,
         days=[
-            DayProgress(date=day.isoformat(), minutes=int(spent.total_seconds() // 60))
-            for day, spent in active.items()
+            DayProgress(date=day.isoformat(), minutes=active.get(day, 0) // 60)
+            for day in (first_day + timedelta(days=i) for i in range(days))
         ],
     )
 
@@ -570,9 +601,9 @@ def practice_progress(
 @app.get("/messages/{message_id}/audio")
 def message_audio(message_id: int) -> Response:
     """The MP3 of one of Kai's stored replies."""
-    with closing(connect()) as conn:
+    with pool.connection() as conn:
         row = conn.execute(
-            "SELECT audio FROM messages WHERE id = ?", (message_id,)
+            "SELECT audio FROM messages WHERE id = %s", (message_id,)
         ).fetchone()
     if row is None or row["audio"] is None:
         raise HTTPException(status_code=404, detail="No audio for this message")
