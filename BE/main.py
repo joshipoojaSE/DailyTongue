@@ -24,11 +24,25 @@ if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL is required: the Neon Postgres connection string")
 
 # Neon is reached over the network, so connections are pooled and reused.
+# Neon drops idle connections (its proxy closes the socket, and serverless
+# computes suspend), so a pooled connection can be dead by the time we reuse it.
+# check_connection tests one before handing it out and quietly replaces it,
+# max_idle retires connections before Neon does, and the keepalives stop the
+# socket going idle long enough to be dropped mid-conversation.
 pool = ConnectionPool(
     DATABASE_URL,
     min_size=1,
     max_size=10,
-    kwargs={"row_factory": dict_row},
+    kwargs={
+        "row_factory": dict_row,
+        "keepalives": 1,
+        "keepalives_idle": 30,
+        "keepalives_interval": 10,
+        "keepalives_count": 3,
+    },
+    check=ConnectionPool.check_connection,
+    max_idle=120,
+    max_lifetime=600,
     open=False,
 )
 

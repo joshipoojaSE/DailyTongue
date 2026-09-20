@@ -4,10 +4,9 @@ A minimal FastAPI DailyTongue. Upload an audio file and receive its transcript a
 
 ## Setup
 
-```bash
+```powershell
 python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
+.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
 Common audio formats such as WAV, MP3, M4A, and WEBM are supported.
@@ -24,8 +23,21 @@ startup if they don't exist.
 
 ## Run
 
-```bash
+```powershell
+.venv\Scripts\activate
 uvicorn main:app --reload
+```
+
+`Fatal error in launcher: Unable to create process using '...python.exe'` means the venv was
+moved or renamed after it was created, so the `.exe` launchers in `.venv\Scripts\` point at a
+python that is no longer there. Run the module directly,
+`.venv\Scripts\python.exe -m uvicorn main:app --reload` (same for pip:
+`.venv\Scripts\python.exe -m pip ...`), or rebuild the venv:
+
+```powershell
+rm -r -force .venv
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
 ## Requests

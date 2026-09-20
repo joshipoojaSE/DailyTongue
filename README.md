@@ -42,12 +42,13 @@ Each message is labelled with who sent it, whether it was spoken or typed, and i
 
 ### 1. Backend
 
-```bash
+```powershell
 cd BE
 python -m venv .venv
-.venv\Scripts\activate        # macOS/Linux: source .venv/bin/activate
-pip install -r requirements.txt
+.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
+
+On macOS/Linux, that last line is `.venv/bin/python -m pip install -r requirements.txt`.
 
 Create `BE/.env`:
 
@@ -60,8 +61,25 @@ The backend creates its tables in that Neon database on startup if they don't ex
 
 Start the API on http://127.0.0.1:8000:
 
-```bash
+```powershell
+.venv\Scripts\activate        # macOS/Linux: source .venv/bin/activate
 uvicorn main:app --reload
+```
+
+If `uvicorn` fails with `Fatal error in launcher: Unable to create process using '...python.exe'`,
+the venv was moved or renamed after it was created — the `.exe` launchers in `.venv\Scripts\`
+still point at the old path. Run the module directly instead:
+
+```powershell
+.venv\Scripts\python.exe -m uvicorn main:app --reload
+```
+
+or rebuild the venv:
+
+```powershell
+rm -r -force .venv
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
 ### 2. Frontend
