@@ -25,8 +25,15 @@ startup if they don't exist.
 
 ```powershell
 .venv\Scripts\activate
-uvicorn main:app --reload
+python -m uvicorn main:app --reload
 ```
+
+`python -m` makes sure the venv's uvicorn runs; a bare `uvicorn` can silently pick up a
+global install instead.
+
+Postgres is reached through pg8000, a pure-Python driver. psycopg's binary build ships an
+unsigned DLL that Windows Smart App Control blocks
+(`DLL load failed ... An Application Control policy has blocked this file`).
 
 `Fatal error in launcher: Unable to create process using '...python.exe'` means the venv was
 moved or renamed after it was created, so the `.exe` launchers in `.venv\Scripts\` point at a

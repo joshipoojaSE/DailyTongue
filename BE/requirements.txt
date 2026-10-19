@@ -2,7 +2,8 @@ fastapi
 # Needs the top-level client.chat.completions.parse; on openai 1.x it only
 # exists as client.beta.chat.completions.parse.
 openai>=3,<4
-psycopg[binary,pool]
+# Pure Python: psycopg's native DLL is blocked by Windows Smart App Control.
+pg8000
 python-dotenv
 python-multipart
 uvicorn[standard]
