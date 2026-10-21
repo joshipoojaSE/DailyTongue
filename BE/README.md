@@ -107,16 +107,27 @@ records `"spoken"`), and `null` for Kai or when it wasn't sent.
 
 ## Daily goal
 
-Learners aim to talk with Kai for 60 minutes a day (`DAILY_GOAL_MINUTES`). Days run from
-midnight to midnight IST. A day's time is the time between its consecutive messages in the
-conversation; gaps longer than 5 minutes (`IDLE_GAP`) count as a break and are skipped.
-Each message adds its gap to that day's total in the `practice_time` table as it is saved,
-so progress is read from the database rather than recomputed from every message.
+Learners aim to practise for 60 minutes a day (`DAILY_GOAL_MINUTES`). Days run from
+midnight to midnight IST. Practice time is measured by the frontend, not by API requests:
+it counts seconds while the learner is in Free Talk or scene practice, the tab is visible,
+and they spoke or typed in the last 90 seconds. Every 15 seconds it sends them as a
+heartbeat with the conversation id, which [activity.py](activity.py) adds to that
+conversation's row for the day in `practice_time` (a heartbeat that crosses midnight is split
+between the two days). A day's total is the sum over all conversations:
+
+```bash
+curl -X POST http://127.0.0.1:8000/activity ^
+  -H "Content-Type: application/json" ^
+  -d "{\"seconds\": 15, \"mode\": \"scene\", \"scene_id\": 3}"
+# -> { "date": "2026-10-19", "seconds": 1815, "goal_minutes": 60 }
+
+curl http://127.0.0.1:8000/activity/today
+```
 
 Get the minutes for each of the last `days` days (1–366, default 7), oldest first, ending today:
 
 ```bash
-curl "http://127.0.0.1:8000/conversations/<conversation_id>/progress?days=7"
+curl "http://127.0.0.1:8000/activity?days=7"
 ```
 
 ```json
@@ -129,6 +140,50 @@ curl "http://127.0.0.1:8000/conversations/<conversation_id>/progress?days=7"
     { "date": "2026-09-15", "minutes": 42 }
   ]
 }
+```
+
+## Scenes
+
+A scene is a saved two-character dialogue the learner practises line by line
+([scenes.py](scenes.py) has the validation and `cache_key`). Tables: `scenes`, `scene_lines`
+(each line's MP3 is stored in `audio` once made), `practice_runs`, plus a `scene` column on
+`messages` for Kai's messages that wrote one. They're created on startup like the rest.
+
+Kai calls its `create_scene` tool when asked for a dialogue. If a saved scene has the same
+`cache_key` (sha256 of the normalised situation, topic and characters), `/respond` returns it
+as `existing_scene` without writing anything. Otherwise a second request writes the scene as
+strict JSON, returned as `scene`.
+
+```bash
+# Save a dialogue (no OpenAI request)
+curl -X POST http://127.0.0.1:8000/scenes -H "Content-Type: application/json" -d @scene.json
+
+# A line's audio: made with OpenAI on the first request, served from the database after
+curl -o line.mp3 http://127.0.0.1:8000/scenes/1/lines/2/audio
+
+# Start and finish a run; finishing counts it in the scene's practice_count
+curl -X POST http://127.0.0.1:8000/practice-runs -H "Content-Type: application/json" -d "{\"scene_id\": 1, \"my_role\": \"Maya\"}"
+curl -X PATCH http://127.0.0.1:8000/practice-runs/1 -H "Content-Type: application/json" -d "{\"avg_score\": 0.86, \"active_seconds\": 140}"
+
+```
+
+Optional settings in `.env`:
+
+```env
+SCENE_TTS_PROVIDER=openai_cached   # or browser: the frontend uses speechSynthesis instead
+SCENE_OFFSCRIPT_THRESHOLD=0.7  # lines below are marked off-script
+SCENE_VOICE_A=verse                # the scene's first character
+SCENE_VOICE_B=nova                 # the second
+```
+
+Every OpenAI request is logged to the console as `openai call #N: ...`, so you can check
+that replaying a scene makes none.
+
+## Tests
+
+```powershell
+.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.venv\Scripts\python.exe -m pytest
 ```
 
 ## Tutor feedback

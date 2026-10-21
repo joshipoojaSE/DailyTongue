@@ -1,6 +1,7 @@
-// The practice dashboard: how long the learner talked with Kai on each day.
+// The practice dashboard: how long the learner practised (Free Talk and scenes) each day.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { getProgress } from "./api.js";
+import { getActivity } from "./api.js";
+import { BackButton } from "./common.jsx";
 import Tongue from "./Tongue.jsx";
 
 // The date ranges on offer, in days ending today.
@@ -286,7 +287,7 @@ function Report({ progress }) {
   );
 }
 
-export default function Dashboard({ conversationId, onBack }) {
+export default function Dashboard({ onBack }) {
   const [range, setRange] = useState(RANGES[0]);
   // "loading" | "done" | "error". The last report stays on screen while another loads.
   const [status, setStatus] = useState("loading");
@@ -295,10 +296,9 @@ export default function Dashboard({ conversationId, onBack }) {
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
-    if (!conversationId) return;
     let ignore = false;
     setStatus("loading");
-    getProgress(conversationId, range)
+    getActivity(range)
       .then((data) => {
         if (ignore) return;
         setProgress(data);
@@ -310,17 +310,10 @@ export default function Dashboard({ conversationId, onBack }) {
     return () => {
       ignore = true;
     };
-  }, [conversationId, range, attempt]);
+  }, [range, attempt]);
 
   let body;
-  if (!conversationId) {
-    body = (
-      <div className="empty">
-        <Tongue size={96} mood="happy" />
-        <p>Talk with Kai to start tracking your practice.</p>
-      </div>
-    );
-  } else if (!progress) {
+  if (!progress) {
     body =
       status === "error" ? (
         <div className="empty">
@@ -358,36 +351,22 @@ export default function Dashboard({ conversationId, onBack }) {
   return (
     <main className="dashboard">
       <div className="container dashboard-inner">
-        <button type="button" className="back" onClick={onBack}>
-          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-            <path
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2.4"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M19 12H5M11 6l-6 6 6 6"
-            />
-          </svg>
-          Back to chat
-        </button>
+        <BackButton onClick={onBack}>Back to chat</BackButton>
 
         <div className="dashboard-heading">
           <h2>Your practice</h2>
-          {conversationId && (
-            <div className="range" role="group" aria-label="Date range">
-              {RANGES.map((days) => (
-                <button
-                  key={days}
-                  type="button"
-                  aria-pressed={range === days}
-                  onClick={() => setRange(days)}
-                >
-                  {days} days
-                </button>
-              ))}
-            </div>
-          )}
+          <div className="range" role="group" aria-label="Date range">
+            {RANGES.map((days) => (
+              <button
+                key={days}
+                type="button"
+                aria-pressed={range === days}
+                onClick={() => setRange(days)}
+              >
+                {days} days
+              </button>
+            ))}
+          </div>
         </div>
 
         {body}

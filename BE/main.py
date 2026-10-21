@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 import logging
@@ -13,11 +14,45 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, Response, UploadF
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
-from db import ConnectionPool
-
 load_dotenv()
 
+# Loaded after .env, since scenes reads its voice settings from the environment.
+from activity import MAX_HEARTBEAT_SECONDS, add_activity, today  # noqa: E402
+from db import ConnectionPool  # noqa: E402
+from scenes import (  # noqa: E402
+    GeneratedScene,
+    SceneLine,
+    SceneRequest,
+    cache_key,
+    scene_problem,
+    to_markdown,
+    voice_for,
+)
+
 logger = logging.getLogger(__name__)
+
+# Every OpenAI request is logged here (uvicorn doesn't show app INFO logs otherwise),
+# so you can check that replaying a scene makes none.
+openai_log = logging.getLogger("dailytongue.openai")
+openai_log.setLevel(logging.INFO)
+if not openai_log.handlers:
+    openai_log.addHandler(logging.StreamHandler())
+openai_calls = 0
+
+
+def log_openai(what: str) -> None:
+    global openai_calls
+    openai_calls += 1
+    openai_log.info("openai call #%d: %s", openai_calls, what)
+
+
+# How Kai's lines are voiced in scene practice: "openai_cached" makes each line's audio
+# once and reuses it, "browser" uses the browser's own speech synthesis, which is free.
+SCENE_TTS_PROVIDER = os.getenv("SCENE_TTS_PROVIDER", "openai_cached")
+if SCENE_TTS_PROVIDER not in ("openai_cached", "browser"):
+    raise RuntimeError("SCENE_TTS_PROVIDER must be openai_cached or browser")
+# In scene practice, a line that scores below this is marked off-script.
+SCENE_OFFSCRIPT_THRESHOLD = float(os.getenv("SCENE_OFFSCRIPT_THRESHOLD", "0.7"))
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
@@ -47,7 +82,59 @@ SYSTEM_PROMPT = """Your name is Kai. If the user asks who you are, introduce you
 You're an expert voice agent. You are given the transcript of what
 user has said using voice. Respond as a voice agent because your response may be
 converted back to audio and played to the user.
+
+When the user asks you to write or create a dialogue, scene, script or role-play between
+two characters, don't write it yourself: call create_scene.
 """
+
+CREATE_SCENE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "create_scene",
+        "description": "Writes a scripted dialogue between exactly two characters for the"
+        " learner to save and practise. Use it whenever the learner asks for a dialogue,"
+        " scene, script, role-play or conversation between two characters.",
+        "strict": True,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "situation": {
+                    "type": "string",
+                    "description": "Where it happens and what is going on, as a short"
+                    " lowercase noun phrase, e.g. 'forest at night'",
+                },
+                "topic": {
+                    "type": "string",
+                    "description": "What the characters talk about, as a short lowercase"
+                    " noun phrase, e.g. 'strange noise in the bushes'",
+                },
+                "characters": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Exactly two first names: the ones the learner gave,"
+                    " otherwise two you choose",
+                },
+                "line_count": {
+                    "type": "integer",
+                    "description": "Total lines across both characters: what the learner"
+                    " asked for (8 each means 16), otherwise 12",
+                },
+            },
+            "required": ["situation", "topic", "characters", "line_count"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+# Writes the dialogue for a create_scene request, as strict JSON.
+SCENE_PROMPT = """You write short scripted dialogues for English learners to practise
+speaking aloud. Write natural, everyday spoken English at an intermediate level: short
+sentences, common vocabulary, some useful phrases and contractions. The two characters take
+turns, starting with the first character. Each line is one or two sentences.
+
+Return JSON with the title (3 to 6 words), the situation, the topic, the two characters
+exactly as given, and the lines. Each line's speaker is exactly one of the two character
+names."""
 
 # Agent 2: Ila, the tutor. Silently observes the whole conversation and coaches
 # the learner's English one message at a time.
@@ -80,12 +167,8 @@ SPEAKERS = {"user": "Learner", "assistant": "Kai"}
 # Only the most recent turns are sent to the model, to bound prompt size.
 MAX_HISTORY_MESSAGES = 20
 
-# Learners aim to talk with Kai for this many minutes each day.
+# Learners aim to practise for this many minutes each day.
 DAILY_GOAL_MINUTES = 60
-# A longer gap between messages means the learner stepped away, so it isn't counted.
-IDLE_GAP = timedelta(minutes=5)
-# Days start at midnight India Standard Time, as in the frontend. IST has no daylight saving.
-IST = timezone(timedelta(hours=5, minutes=30))
 SERVER_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
@@ -108,9 +191,20 @@ class RespondRequest(BaseModel):
     input: InputMode | None = None
 
 
+class SceneRef(BaseModel):
+    id: int
+    title: str
+
+
 class Reply(BaseModel):
     response: str
     audio_base64: str
+    # Set when Kai wrote a scene: the dialogue, which `response` also holds as text.
+    scene: GeneratedScene | None = None
+    # Set instead when a saved scene already matches the request: that scene, and the
+    # request, to send to /conversations/{id}/scenes for a new one anyway.
+    existing_scene: SceneRef | None = None
+    scene_request: SceneRequest | None = None
 
 
 class RespondResponse(Reply):
@@ -156,6 +250,8 @@ class StoredMessage(BaseModel):
     input: InputMode | None
     has_audio: bool
     feedback: FeedbackEntry | None
+    # The dialogue, for Kai's messages that wrote a scene.
+    scene: GeneratedScene | None = None
     # UTC, "YYYY-MM-DD HH:MM:SS".
     created_at: str
 
@@ -183,6 +279,96 @@ class SpeakRequest(BaseModel):
 
 class SpeakResponse(BaseModel):
     audio_base64: str
+
+
+class GeneratedSceneMessage(BaseModel):
+    message_id: int
+    response: str
+    scene: GeneratedScene
+
+
+class SceneCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    situation: str = Field(default="", max_length=500)
+    topic: str = Field(default="", max_length=500)
+    characters: list[str]
+    lines: list[SceneLine]
+    # The chat message it was saved from, if any.
+    source_message_id: int | None = None
+
+
+class SceneUpdate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+
+
+class SceneSummary(BaseModel):
+    id: int
+    title: str
+    situation: str
+    topic: str
+    characters: list[str]
+    line_count: int
+    practice_count: int
+    source_message_id: int | None
+    # UTC, "YYYY-MM-DD HH:MM:SS"; last_practiced_at is null until a run is finished.
+    last_practiced_at: str | None
+    created_at: str
+
+
+class StoredSceneLine(BaseModel):
+    id: int
+    line_no: int
+    speaker: str
+    text: str
+    voice: str | None
+    # Whether the line's audio has been made yet. It's at /scenes/{id}/lines/{line_id}/audio,
+    # which makes it on the first request.
+    has_audio: bool
+
+
+class SceneDetail(SceneSummary):
+    lines: list[StoredSceneLine]
+
+
+class RunCreate(BaseModel):
+    scene_id: int
+    my_role: str
+
+
+class RunUpdate(BaseModel):
+    avg_score: float = Field(ge=0, le=1)
+    active_seconds: int = Field(default=0, ge=0)
+
+
+class PracticeRun(BaseModel):
+    id: int
+    scene_id: int
+    my_role: str
+    started_at: str
+    ended_at: str | None
+    avg_score: float | None
+    active_seconds: int
+
+
+class ActivityRequest(BaseModel):
+    seconds: int = Field(ge=1, le=MAX_HEARTBEAT_SECONDS)
+    mode: Literal["free_talk", "scene"]
+    scene_id: int | None = None
+    # The learner's conversation, if they have one yet; the seconds are stored under it.
+    conversation_id: str | None = Field(default=None, max_length=64)
+
+
+class ActivityToday(BaseModel):
+    # Today in IST, "YYYY-MM-DD".
+    date: str
+    seconds: int
+    goal_minutes: int
+
+
+class AppConfig(BaseModel):
+    scene_tts_provider: Literal["openai_cached", "browser"]
+    offscript_threshold: float
+    goal_minutes: int
 
 
 def init_db() -> None:
@@ -226,8 +412,57 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS messages_conversation"
             " ON messages (conversation_id, id)"
         )
-        # How long the learner practised on each day, kept up to date as messages
-        # are saved, so progress is read rather than recomputed from every message.
+        # The dialogue of Kai's messages that wrote a scene, as GeneratedScene JSON.
+        conn.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS scene TEXT")
+        # Saved dialogues the learner practises. cache_key identifies the request a
+        # generated scene was written for, so asking again can reuse it.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS scenes (
+                id BIGSERIAL PRIMARY KEY,
+                title TEXT NOT NULL,
+                situation TEXT NOT NULL DEFAULT '',
+                topic TEXT NOT NULL DEFAULT '',
+                char_a TEXT NOT NULL,
+                char_b TEXT NOT NULL,
+                cache_key TEXT UNIQUE,
+                source_message_id BIGINT,
+                practice_count INTEGER NOT NULL DEFAULT 0,
+                last_practiced_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """
+        )
+        # audio is the line's MP3, made the first time it's needed and kept for good.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS scene_lines (
+                id BIGSERIAL PRIMARY KEY,
+                scene_id BIGINT NOT NULL REFERENCES scenes (id) ON DELETE CASCADE,
+                line_no INTEGER NOT NULL,
+                speaker TEXT NOT NULL,
+                text TEXT NOT NULL,
+                audio BYTEA,
+                voice TEXT,
+                UNIQUE (scene_id, line_no)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS practice_runs (
+                id BIGSERIAL PRIMARY KEY,
+                scene_id BIGINT NOT NULL REFERENCES scenes (id) ON DELETE CASCADE,
+                my_role TEXT NOT NULL,
+                started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                ended_at TIMESTAMPTZ,
+                avg_score REAL,
+                active_seconds INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        # Seconds of active practice per conversation and IST day, from the frontend's
+        # heartbeats. A day's total is the sum over conversations.
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS practice_time (
@@ -256,45 +491,27 @@ def row_to_feedback(row: dict) -> FeedbackEntry:
     )
 
 
-def record_practice_time(conn, conversation_id: str, message_id: int, at: datetime) -> None:
-    """Adds the time since the conversation's previous message to that day's total.
-    A gap longer than IDLE_GAP means the learner stepped away, and a gap across
-    midnight belongs to neither day, so neither is counted."""
-    previous = conn.execute(
-        "SELECT created_at FROM messages WHERE conversation_id = %s AND id < %s"
-        " ORDER BY id DESC LIMIT 1",
-        (conversation_id, message_id),
-    ).fetchone()
-    if previous is None:
-        return
-
-    at = at.astimezone(IST)
-    before = previous["created_at"].astimezone(IST)
-    if before.date() != at.date() or at - before > IDLE_GAP:
-        return
-
-    conn.execute(
-        "INSERT INTO practice_time (conversation_id, day, seconds) VALUES (%s, %s, %s)"
-        " ON CONFLICT (conversation_id, day)"
-        " DO UPDATE SET seconds = practice_time.seconds + EXCLUDED.seconds",
-        (conversation_id, at.date(), round((at - before).total_seconds())),
-    )
-
-
 def save_message(
     conversation_id: str,
     role: str,
     content: str,
     input: InputMode | None = None,
     audio: bytes | None = None,
+    scene: GeneratedScene | None = None,
 ) -> int:
     with pool.connection() as conn:
         row = conn.execute(
-            "INSERT INTO messages (conversation_id, role, content, input, audio)"
-            " VALUES (%s, %s, %s, %s, %s) RETURNING id, created_at",
-            (conversation_id, role, content, input, audio),
+            "INSERT INTO messages (conversation_id, role, content, input, audio, scene)"
+            " VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+            (
+                conversation_id,
+                role,
+                content,
+                input,
+                audio,
+                scene.model_dump_json() if scene else None,
+            ),
         ).fetchone()
-        record_practice_time(conn, conversation_id, row["id"], row["created_at"])
     return row["id"]
 
 
@@ -304,6 +521,7 @@ def save_reply(conversation_id: str, reply: Reply) -> int:
         "assistant",
         reply.response,
         audio=base64.b64decode(reply.audio_base64),
+        scene=reply.scene,
     )
 
 
@@ -349,6 +567,7 @@ async def transcribe_upload(audio: UploadFile) -> str:
             file_path = file.name
 
         try:
+            log_openai("transcribe")
             with open(file_path, "rb") as audio_file:
                 transcription = await client.audio.transcriptions.create(
                     model="gpt-4o-mini-transcribe",
@@ -367,6 +586,7 @@ async def synthesize(
 ) -> str:
     """Speaks the text; returns base64-encoded MP3."""
     options = {"instructions": instructions} if instructions else {}
+    log_openai(f"tts ({voice}): {text[:40]!r}")
     try:
         speech = await client.audio.speech.create(
             model="gpt-4o-mini-tts",
@@ -381,16 +601,106 @@ async def synthesize(
 
 
 async def generate_reply(history: list[Message]) -> Reply:
+    log_openai("kai reply")
     completion = await client.chat.completions.create(
         model="gpt-4.1-mini",
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             *(m.model_dump() for m in history[-MAX_HISTORY_MESSAGES:]),
         ],
+        tools=[CREATE_SCENE_TOOL],
     )
 
-    response = completion.choices[0].message.content or ""
+    message = completion.choices[0].message
+    call = next(
+        (c for c in message.tool_calls or () if c.function.name == "create_scene"), None
+    )
+    if call is not None:
+        return await scene_reply(SceneRequest.model_validate_json(call.function.arguments), history)
+
+    response = message.content or ""
     return Reply(response=response, audio_base64=await synthesize(response))
+
+
+def find_scene(key: str) -> SceneRef | None:
+    with pool.connection() as conn:
+        row = conn.execute(
+            "SELECT id, title FROM scenes WHERE cache_key = %s", (key,)
+        ).fetchone()
+    return SceneRef(**row) if row else None
+
+
+async def scene_reply(request: SceneRequest, history: list[Message]) -> Reply:
+    """Kai's reply to a create_scene call: a saved scene that matches the request if there
+    is one, otherwise a newly written scene."""
+    existing = find_scene(cache_key(request.situation, request.topic, request.characters))
+    if existing is not None:
+        response = (
+            f'You already have a saved scene like this: "{existing.title}". Want to practise'
+            " that one, or shall I write you a new one?"
+        )
+        return Reply(
+            response=response,
+            audio_base64=await synthesize(response),
+            existing_scene=existing,
+            scene_request=request,
+        )
+
+    scene = await write_scene(request, history[-1].content if history else "")
+    a, b = scene.characters
+    spoken = (
+        f"Here's a scene called {scene.title}, with {a} and {b}."
+        " Tap Save as scene to practise it."
+    )
+    # Only the introduction is read aloud; the dialogue is for practice, line by line.
+    return Reply(response=to_markdown(scene), audio_base64=await synthesize(spoken), scene=scene)
+
+
+async def write_scene(request: SceneRequest, learner_request: str) -> GeneratedScene:
+    """Writes the dialogue for a scene request as strict JSON. Its situation, topic and
+    characters are the request's, so the scene's cache_key matches the request's."""
+    if len(request.characters) != 2:
+        raise HTTPException(status_code=502, detail="A scene needs exactly two characters")
+    line_count = min(max(request.line_count, 4), 30)
+    log_openai("write scene")
+    try:
+        completion = await client.chat.completions.parse(
+            model="gpt-4.1-mini",
+            messages=[
+                {"role": "system", "content": SCENE_PROMPT},
+                {
+                    "role": "user",
+                    "content": f"The learner asked: {learner_request}\n\n"
+                    f"Situation: {request.situation}\nTopic: {request.topic}\n"
+                    f"Characters: {request.characters[0]}, {request.characters[1]}\n"
+                    f"Number of lines: {line_count}",
+                },
+            ],
+            response_format=GeneratedScene,
+        )
+    except Exception as error:
+        logger.exception("Writing a scene failed")
+        raise HTTPException(status_code=502, detail="Writing the scene failed") from error
+
+    scene = completion.choices[0].message.parsed
+    if scene is None:
+        raise HTTPException(status_code=502, detail="Writing the scene failed")
+    scene = scene.model_copy(
+        update={
+            "situation": request.situation,
+            "topic": request.topic,
+            "characters": [c.strip() for c in request.characters],
+            "lines": [
+                SceneLine(speaker=line.speaker.strip(), text=line.text.strip())
+                for line in scene.lines
+            ],
+        }
+    )
+    problem = scene_problem(scene.characters, scene.lines)
+    if problem:
+        logger.error("The scene writer returned an invalid scene: %s", problem)
+        raise HTTPException(status_code=502, detail="Writing the scene failed")
+    return scene
 
 
 async def coach(
@@ -402,6 +712,7 @@ async def coach(
         f"{SPEAKERS[m.role]}: {m.content}" for m in conversation[-MAX_HISTORY_MESSAGES:]
     )
 
+    log_openai("ila feedback")
     try:
         completion = await client.chat.completions.parse(
             model="gpt-4.1-mini",
@@ -533,7 +844,7 @@ def list_messages(
     """The newest `limit` messages (older than `before`, if given), oldest first."""
     with pool.connection() as conn:
         rows = conn.execute(
-            "SELECT id, role, content, input, audio IS NOT NULL AS has_audio, created_at"
+            "SELECT id, role, content, input, audio IS NOT NULL AS has_audio, scene, created_at"
             " FROM messages WHERE conversation_id = %s"
             " AND (%s::bigint IS NULL OR id < %s::bigint)"
             " ORDER BY id DESC LIMIT %s",
@@ -562,36 +873,12 @@ def list_messages(
                 input=row["input"],
                 has_audio=bool(row["has_audio"]),
                 feedback=feedback.get(row["id"]),
+                scene=GeneratedScene.model_validate_json(row["scene"]) if row["scene"] else None,
                 created_at=utc_text(row["created_at"]),
             )
             for row in rows
         ],
         has_more=has_more,
-    )
-
-
-@app.get("/conversations/{conversation_id}/progress", response_model=Progress)
-def practice_progress(
-    conversation_id: str,
-    days: int = Query(default=7, ge=1, le=366, description="How many days, ending today"),
-) -> Progress:
-    """Minutes spent talking with Kai on each of the last `days` days (IST), as recorded
-    by record_practice_time when each message was saved."""
-    first_day = datetime.now(IST).date() - timedelta(days=days - 1)
-    with pool.connection() as conn:
-        rows = conn.execute(
-            "SELECT day, seconds FROM practice_time"
-            " WHERE conversation_id = %s AND day >= %s",
-            (conversation_id, first_day),
-        ).fetchall()
-
-    active = {row["day"]: row["seconds"] for row in rows}
-    return Progress(
-        goal_minutes=DAILY_GOAL_MINUTES,
-        days=[
-            DayProgress(date=day.isoformat(), minutes=active.get(day, 0) // 60)
-            for day in (first_day + timedelta(days=i) for i in range(days))
-        ],
     )
 
 
@@ -605,3 +892,328 @@ def message_audio(message_id: int) -> Response:
     if row is None or row["audio"] is None:
         raise HTTPException(status_code=404, detail="No audio for this message")
     return Response(content=row["audio"], media_type="audio/mpeg")
+
+
+@app.get("/config", response_model=AppConfig)
+def app_config() -> AppConfig:
+    """Settings the frontend follows, so they live in one place, BE/.env."""
+    return AppConfig(
+        scene_tts_provider=SCENE_TTS_PROVIDER,
+        offscript_threshold=SCENE_OFFSCRIPT_THRESHOLD,
+        goal_minutes=DAILY_GOAL_MINUTES,
+    )
+
+
+class SceneDraftRequest(SceneRequest):
+    # What the learner asked for, as context for the writer.
+    request: str = Field(default="", max_length=2000)
+
+
+@app.post("/conversations/{conversation_id}/scenes", response_model=GeneratedSceneMessage)
+async def write_new_scene(
+    conversation_id: str, request: SceneDraftRequest
+) -> GeneratedSceneMessage:
+    """Writes a new scene even though a saved one matches the request, and adds it to the
+    conversation as a message from Kai (without audio)."""
+    scene = await write_scene(request, request.request)
+    response = to_markdown(scene)
+    message_id = save_message(conversation_id, "assistant", response, scene=scene)
+    return GeneratedSceneMessage(message_id=message_id, response=response, scene=scene)
+
+
+SCENE_COLUMNS = (
+    "s.id, s.title, s.situation, s.topic, s.char_a, s.char_b, s.practice_count,"
+    " s.source_message_id, s.last_practiced_at, s.created_at,"
+    " (SELECT count(*) FROM scene_lines l WHERE l.scene_id = s.id) AS line_count"
+)
+
+
+def row_to_scene(row: dict) -> SceneSummary:
+    return SceneSummary(
+        id=row["id"],
+        title=row["title"],
+        situation=row["situation"],
+        topic=row["topic"],
+        characters=[row["char_a"], row["char_b"]],
+        line_count=row["line_count"],
+        practice_count=row["practice_count"],
+        source_message_id=row["source_message_id"],
+        last_practiced_at=(
+            utc_text(row["last_practiced_at"]) if row["last_practiced_at"] else None
+        ),
+        created_at=utc_text(row["created_at"]),
+    )
+
+
+def load_scene(conn, scene_id: int) -> SceneDetail:
+    row = conn.execute(
+        f"SELECT {SCENE_COLUMNS} FROM scenes s WHERE s.id = %s", (scene_id,)
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="No such scene")
+    lines = conn.execute(
+        "SELECT id, line_no, speaker, text, voice, audio IS NOT NULL AS has_audio"
+        " FROM scene_lines WHERE scene_id = %s ORDER BY line_no",
+        (scene_id,),
+    ).fetchall()
+    return SceneDetail(
+        **row_to_scene(row).model_dump(),
+        lines=[StoredSceneLine(**line) for line in lines],
+    )
+
+
+@app.post("/scenes", response_model=SceneDetail)
+def create_scene(request: SceneCreate) -> SceneDetail:
+    """Saves a dialogue as a scene: one parsed from a chat message, or one Kai wrote as JSON.
+    Saving the same message twice returns the scene saved the first time."""
+    characters = [c.strip() for c in request.characters]
+    lines = [SceneLine(speaker=l.speaker.strip(), text=l.text.strip()) for l in request.lines]
+    problem = scene_problem(characters, lines)
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
+    # Only generated scenes, which have a situation and topic, can be matched to a request.
+    key = (
+        cache_key(request.situation, request.topic, characters)
+        if request.situation.strip() or request.topic.strip()
+        else None
+    )
+
+    with pool.connection() as conn:
+        if request.source_message_id is not None:
+            saved = conn.execute(
+                "SELECT id FROM scenes WHERE source_message_id = %s",
+                (request.source_message_id,),
+            ).fetchone()
+            if saved:
+                return load_scene(conn, saved["id"])
+        # The learner asked for a new scene although one matched; the first keeps the key.
+        if key and conn.execute("SELECT 1 FROM scenes WHERE cache_key = %s", (key,)).fetchone():
+            key = None
+
+        scene_id = conn.execute(
+            "INSERT INTO scenes"
+            " (title, situation, topic, char_a, char_b, cache_key, source_message_id)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            (
+                request.title.strip(),
+                request.situation.strip(),
+                request.topic.strip(),
+                characters[0],
+                characters[1],
+                key,
+                request.source_message_id,
+            ),
+        ).fetchone()["id"]
+        conn.execute(
+            "INSERT INTO scene_lines (scene_id, line_no, speaker, text)"
+            " SELECT %s, n, speaker, text"
+            " FROM unnest(%s::int[], %s::text[], %s::text[]) AS t (n, speaker, text)",
+            (
+                scene_id,
+                list(range(1, len(lines) + 1)),
+                [line.speaker for line in lines],
+                [line.text for line in lines],
+            ),
+        )
+        return load_scene(conn, scene_id)
+
+
+@app.get("/scenes", response_model=list[SceneSummary])
+def list_scenes() -> list[SceneSummary]:
+    """Saved scenes, most recently practised (or saved) first."""
+    with pool.connection() as conn:
+        rows = conn.execute(
+            f"SELECT {SCENE_COLUMNS} FROM scenes s"
+            " ORDER BY COALESCE(s.last_practiced_at, s.created_at) DESC, s.id DESC"
+        ).fetchall()
+    return [row_to_scene(row) for row in rows]
+
+
+@app.get("/scenes/{scene_id}", response_model=SceneDetail)
+def get_scene(scene_id: int) -> SceneDetail:
+    with pool.connection() as conn:
+        return load_scene(conn, scene_id)
+
+
+@app.patch("/scenes/{scene_id}", response_model=SceneDetail)
+def rename_scene(scene_id: int, request: SceneUpdate) -> SceneDetail:
+    with pool.connection() as conn:
+        conn.execute(
+            "UPDATE scenes SET title = %s WHERE id = %s", (request.title.strip(), scene_id)
+        )
+        return load_scene(conn, scene_id)
+
+
+@app.delete("/scenes/{scene_id}")
+def delete_scene(scene_id: int) -> dict:
+    """Deletes the scene with its lines, their audio and its practice runs."""
+    with pool.connection() as conn:
+        row = conn.execute(
+            "DELETE FROM scenes WHERE id = %s RETURNING id", (scene_id,)
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="No such scene")
+    return {"id": scene_id}
+
+
+# One request at a time makes a line's audio, so two at once (a browser often sends more
+# than one request for a media file) don't both pay for it.
+line_audio_locks: dict[int, asyncio.Lock] = {}
+
+
+def stored_line(scene_id: int, line_id: int) -> dict:
+    with pool.connection() as conn:
+        row = conn.execute(
+            "SELECT l.speaker, l.text, l.audio, s.char_a FROM scene_lines l"
+            " JOIN scenes s ON s.id = l.scene_id WHERE l.id = %s AND l.scene_id = %s",
+            (line_id, scene_id),
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="No such scene line")
+    return row
+
+
+@app.get("/scenes/{scene_id}/lines/{line_id}/audio")
+async def scene_line_audio(scene_id: int, line_id: int) -> Response:
+    """The MP3 of one scene line in its character's voice. It's made on the first request
+    and stored, so every later one is served without calling OpenAI."""
+    row = stored_line(scene_id, line_id)
+    audio = row["audio"]
+    if audio is None:
+        async with line_audio_locks.setdefault(line_id, asyncio.Lock()):
+            # Made by another request while this one waited?
+            row = stored_line(scene_id, line_id)
+            audio = row["audio"]
+            if audio is None:
+                voice = voice_for(row["speaker"], row["char_a"])
+                audio = base64.b64decode(
+                    await synthesize(
+                        row["text"],
+                        voice=voice,
+                        instructions=f"You are {row['speaker']}, a character in a short"
+                        " everyday scene. Say the line naturally, with feeling, at a pace an"
+                        " English learner can follow.",
+                    )
+                )
+                with pool.connection() as conn:
+                    conn.execute(
+                        "UPDATE scene_lines SET audio = %s, voice = %s WHERE id = %s",
+                        (audio, voice, line_id),
+                    )
+
+    # A line's text never changes, so browsers can keep its audio for good.
+    return Response(
+        content=bytes(audio),
+        media_type="audio/mpeg",
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
+
+
+RUN_COLUMNS = "id, scene_id, my_role, started_at, ended_at, avg_score, active_seconds"
+
+
+def row_to_run(row: dict) -> PracticeRun:
+    return PracticeRun(
+        id=row["id"],
+        scene_id=row["scene_id"],
+        my_role=row["my_role"],
+        started_at=utc_text(row["started_at"]),
+        ended_at=utc_text(row["ended_at"]) if row["ended_at"] else None,
+        avg_score=row["avg_score"],
+        active_seconds=row["active_seconds"],
+    )
+
+
+@app.post("/practice-runs", response_model=PracticeRun)
+def start_run(request: RunCreate) -> PracticeRun:
+    """Starts practising a scene, with the learner playing `my_role`."""
+    with pool.connection() as conn:
+        scene = conn.execute(
+            "SELECT char_a, char_b FROM scenes WHERE id = %s", (request.scene_id,)
+        ).fetchone()
+        if scene is None:
+            raise HTTPException(status_code=404, detail="No such scene")
+        if request.my_role not in (scene["char_a"], scene["char_b"]):
+            raise HTTPException(status_code=400, detail="my_role must be one of the characters")
+        row = conn.execute(
+            "INSERT INTO practice_runs (scene_id, my_role) VALUES (%s, %s)"
+            f" RETURNING {RUN_COLUMNS}",
+            (request.scene_id, request.my_role),
+        ).fetchone()
+    return row_to_run(row)
+
+
+@app.patch("/practice-runs/{run_id}", response_model=PracticeRun)
+def finish_run(run_id: int, request: RunUpdate) -> PracticeRun:
+    """Finishes a run, counting it towards its scene's practice_count. A run that has
+    already finished is left as it was."""
+    with pool.connection() as conn:
+        finished = conn.execute(
+            "UPDATE practice_runs SET ended_at = now(), avg_score = %s, active_seconds = %s"
+            " WHERE id = %s AND ended_at IS NULL RETURNING scene_id",
+            (request.avg_score, request.active_seconds, run_id),
+        ).fetchone()
+        if finished:
+            conn.execute(
+                "UPDATE scenes SET practice_count = practice_count + 1,"
+                " last_practiced_at = now() WHERE id = %s",
+                (finished["scene_id"],),
+            )
+        row = conn.execute(
+            f"SELECT {RUN_COLUMNS} FROM practice_runs WHERE id = %s", (run_id,)
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="No such practice run")
+    return row_to_run(row)
+
+
+def activity_today(conn) -> ActivityToday:
+    day = today()
+    row = conn.execute(
+        "SELECT COALESCE(SUM(seconds), 0) AS seconds FROM practice_time WHERE day = %s", (day,)
+    ).fetchone()
+    return ActivityToday(
+        date=day.isoformat(),
+        seconds=row["seconds"],
+        goal_minutes=DAILY_GOAL_MINUTES,
+    )
+
+
+@app.post("/activity", response_model=ActivityToday)
+def record_activity(request: ActivityRequest) -> ActivityToday:
+    """A heartbeat from the frontend: seconds of active practice (speaking or typing, tab
+    visible) that just ended, in Free Talk or a scene. Returns today's new total."""
+    with pool.connection() as conn:
+        add_activity(
+            conn, request.conversation_id, datetime.now(timezone.utc), request.seconds
+        )
+        return activity_today(conn)
+
+
+@app.get("/activity/today", response_model=ActivityToday)
+def get_activity_today() -> ActivityToday:
+    with pool.connection() as conn:
+        return activity_today(conn)
+
+
+@app.get("/activity", response_model=Progress)
+def activity_by_day(
+    days: int = Query(default=7, ge=1, le=366, description="How many days, ending today"),
+) -> Progress:
+    """Minutes practised on each of the last `days` days (IST), oldest first."""
+    first_day = today() - timedelta(days=days - 1)
+    with pool.connection() as conn:
+        rows = conn.execute(
+            "SELECT day, SUM(seconds) AS seconds FROM practice_time"
+            " WHERE day >= %s GROUP BY day",
+            (first_day,),
+        ).fetchall()
+
+    active = {row["day"]: row["seconds"] for row in rows}
+    return Progress(
+        goal_minutes=DAILY_GOAL_MINUTES,
+        days=[
+            DayProgress(date=day.isoformat(), minutes=active.get(day, 0) // 60)
+            for day in (first_day + timedelta(days=i) for i in range(days))
+        ],
+    )

@@ -1,15 +1,21 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
+  getConfig,
   getFeedback,
   getMessages,
   getReply,
-  getProgress,
+  getScenes,
   messageAudioUrl,
-  speak,
   transcribeAudio,
 } from "./api.js";
+import { Dots, Feedback, KeyboardIcon, MicIcon, mp3Url, parseServerTime } from "./common.jsx";
 import Dashboard from "./Dashboard.jsx";
+import { ExistingScene, SaveScene } from "./SaveScene.jsx";
+import SceneLibrary from "./SceneLibrary.jsx";
+import ScenePractice from "./ScenePractice.jsx";
+import { DIALOGUE_LINE, parseDialogue, suggestTitle } from "./scene.js";
 import Tongue from "./Tongue.jsx";
+import { useActiveWhile, usePracticeTimer } from "./usePracticeTimer.js";
 import { SILENCE_MS, useRecorder } from "./useRecorder.js";
 
 let nextId = 1;
@@ -34,12 +40,6 @@ function saveConversationId(id) {
 }
 
 const savedConversationId = loadConversationId();
-
-// Today's { minutes, goal_minutes } in the conversation.
-async function getToday(conversationId) {
-  const { goal_minutes, days } = await getProgress(conversationId, 1);
-  return { minutes: days[days.length - 1].minutes, goal_minutes };
-}
 
 // Times are shown in India Standard Time, e.g. "19:40" and "Tue 8 Sept".
 const IST = "Asia/Kolkata";
@@ -78,11 +78,6 @@ function dayLabel(date) {
   return year === istDate(now).year ? label : `${label} ${year}`;
 }
 
-// The server stores UTC times as "YYYY-MM-DD HH:MM:SS".
-function parseServerTime(value) {
-  return new Date(`${value.replace(" ", "T")}Z`);
-}
-
 // A message loaded from the server's history, in the shape the chat renders.
 function fromStored(m) {
   return {
@@ -95,14 +90,25 @@ function fromStored(m) {
     audioSrc: m.has_audio ? messageAudioUrl(m.id) : null,
     fromHistory: true,
     feedback: m.feedback ? { status: "done", data: m.feedback } : undefined,
+    scene: m.scene,
   };
 }
 
-// Blob URLs play and replay reliably; long data: URLs often can't be
-// seeked or replayed in Chrome once they've finished.
-function mp3Url(base64) {
-  const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-  return URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" }));
+// "**Maya:** Hello" lines with the speaker in bold, and any other text as it is.
+function MessageText({ text }) {
+  return text
+    .split(/\r?\n/)
+    .filter((line) => line.trim())
+    .map((line, i) => {
+      const match = line.trim().match(DIALOGUE_LINE);
+      return match ? (
+        <p key={i} className="dialogue-line">
+          <strong>{match[1]}:</strong> {match[2]}
+        </p>
+      ) : (
+        <p key={i}>{line}</p>
+      );
+    });
 }
 
 const STATUS = {
@@ -110,41 +116,6 @@ const STATUS = {
   transcribing: "Transcribing…",
   thinking: "Thinking…",
 };
-
-function Dots() {
-  return (
-    <p className="dots">
-      <span />
-      <span />
-      <span />
-    </p>
-  );
-}
-
-function MicIcon({ size }) {
-  return (
-    <svg viewBox="0 0 24 24" width={size} height={size} aria-hidden="true">
-      <path
-        fill="currentColor"
-        d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2Z"
-      />
-    </svg>
-  );
-}
-
-function KeyboardIcon({ size, className }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" width={size} height={size} aria-hidden="true">
-      <rect x="2.5" y="6" width="19" height="12" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.8" />
-      <path
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        d="M6.5 10h.01M10 10h.01M13.5 10h.01M17 10h.01M8 14.5h8"
-      />
-    </svg>
-  );
-}
 
 // "You · spoken · 19:40" or "Kai · 19:41" above a message, in IST. Kai's
 // messages show the tongue mascot in the given mood.
@@ -171,151 +142,13 @@ function MessageMeta({ role, input, createdAt, mood = "rest" }) {
   );
 }
 
-// Only one tutor sentence plays at a time.
-let activeAudio = null;
-
-// Reads a tutor sentence aloud. The audio is fetched on the first click and
-// reused after that, so each sentence costs at most one speech request.
-// `onPlayingChange(text, playing)` reports when it starts and stops.
-function SpeakButton({ text, onPlayingChange }) {
-  // "idle" | "loading" | "playing" | "error"
-  const [state, setState] = useState("idle");
-  const audioRef = useRef(null);
-
-  useEffect(() => () => audioRef.current?.pause(), []);
-
-  async function toggle() {
-    let audio = audioRef.current;
-    if (state === "playing") {
-      audio.pause();
-      return;
-    }
-
-    try {
-      if (!audio) {
-        setState("loading");
-        const { audio_base64 } = await speak(text);
-        audio = new Audio(mp3Url(audio_base64));
-        audio.onplay = () => {
-          setState("playing");
-          onPlayingChange?.(text, true);
-        };
-        audio.onpause = audio.onended = () => {
-          setState("idle");
-          onPlayingChange?.(text, false);
-        };
-        audioRef.current = audio;
-      }
-      if (activeAudio && activeAudio !== audio) activeAudio.pause();
-      activeAudio = audio;
-      audio.currentTime = 0;
-      await audio.play();
-    } catch {
-      setState("error");
-    }
-  }
-
-  const label = {
-    idle: "Listen",
-    loading: "Loading audio",
-    playing: "Stop",
-    error: "Couldn't play audio. Try again",
-  }[state];
-
-  return (
-    <button
-      type="button"
-      className={`speak ${state}`}
-      onClick={toggle}
-      disabled={state === "loading"}
-      aria-label={`${label}: ${text}`}
-      title={label}
-    >
-      {state === "playing" ? (
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor" />
-        </svg>
-      ) : (
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor" />
-          <path
-            d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-          />
-        </svg>
-      )}
-    </button>
-  );
-}
-
-// Ila the tutor's note on one of the user's messages:
-// { status: "pending" | "done" | "error", data? }.
-function Feedback({ feedback }) {
-  const { status, data } = feedback;
-  const correct = status === "done" && data.mistakes.length === 0;
-  // The sentence Ila is reading aloud, if any.
-  const [speaking, setSpeaking] = useState(null);
-
-  function speakingChange(text, playing) {
-    setSpeaking((prev) => (playing ? text : prev === text ? null : prev));
-  }
-
-  const mood = speaking
-    ? "talking"
-    : { pending: "thinking", error: "oops" }[status] ?? (correct ? "happy" : "rest");
-
-  let body;
-  if (status === "pending") {
-    body = <Dots />;
-  } else if (status === "error") {
-    body = <p>Couldn't check this message.</p>;
-  } else if (correct) {
-    body = <p>Perfect English. Nicely said!</p>;
-  } else {
-    body = (
-      <>
-        <p>
-          Try saying: <strong>{data.corrected}</strong>
-          <SpeakButton text={data.corrected} onPlayingChange={speakingChange} />
-        </p>
-        <ul className="mistakes">
-          {data.mistakes.map((m, i) => (
-            <li key={i}>
-              <s>{m.original}</s> → <strong>{m.correction}</strong>
-              <span className="why">{m.explanation}</span>
-            </li>
-          ))}
-        </ul>
-      </>
-    );
-  }
-
-  return (
-    <div className={`feedback ${correct ? "correct" : ""}`}>
-      <span className="role">
-        <Tongue size={22} mood={mood} glasses />
-        Ila · Tutor
-      </span>
-      {body}
-      {status === "done" && data.rephrased && (
-        <p className="rephrased">
-          Another way to say it: <em>{data.rephrased}</em>
-          <SpeakButton text={data.rephrased} onPlayingChange={speakingChange} />
-        </p>
-      )}
-    </div>
-  );
-}
-
 const GOAL_RADIUS = 23;
 const GOAL_CIRCUMFERENCE = 2 * Math.PI * GOAL_RADIUS;
 
-// Today's minutes talking with Kai, as a ring that fills up towards the daily goal.
-// Clicking it opens or closes the practice dashboard.
-function DailyGoal({ minutes, goal, open, onClick }) {
+// Today's minutes of practice (Free Talk and scenes), as a ring that fills up towards the
+// daily goal. Clicking it opens or closes the practice dashboard. `running` is whether the
+// timer is counting right now; it pauses while the learner is away.
+function DailyGoal({ minutes, goal, running, open, onClick }) {
   const met = minutes >= goal;
   const filled = Math.min(minutes / goal, 1);
 
@@ -353,18 +186,51 @@ function DailyGoal({ minutes, goal, open, onClick }) {
         </span>
         <span className="goal-hint">
           {met ? "Goal met! Anything more is a bonus" : `${goal - minutes} min to go`}
+          {!running && " · paused"}
         </span>
       </span>
     </button>
   );
 }
 
+// The header button that opens My Scenes.
+function ScenesButton({ open, onClick }) {
+  return (
+    <button
+      type="button"
+      className={`scenes-button ${open ? "open" : ""}`}
+      onClick={onClick}
+      aria-pressed={open}
+      title={open ? "Back to chat" : "Practise your saved dialogues"}
+    >
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+        <path
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinejoin="round"
+          d="M4 9h16v10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V9Zm0 0 1.2-4.2a1 1 0 0 1 1.2-.7L19 7.4M8.5 4.9 10 8.6M13.5 6.2 15 9"
+        />
+      </svg>
+      <span>My Scenes</span>
+    </button>
+  );
+}
+
 export default function App() {
   const [messages, setMessages] = useState([]);
-  // { minutes, goal_minutes } talked today, once a conversation exists.
-  const [progress, setProgress] = useState(null);
-  // "chat" | "progress" (the practice dashboard).
+  // "chat" | "progress" (the practice dashboard) | "scenes" (My Scenes) | "practice"
   const [view, setView] = useState("chat");
+  // The scene being practised: { sceneId, role }.
+  const [practice, setPractice] = useState(null);
+  // The scene to point out when My Scenes opens.
+  const [focusSceneId, setFocusSceneId] = useState(null);
+  // Saved scenes' ids by the chat message they were saved from.
+  const [savedScenes, setSavedScenes] = useState({});
+  // { scene_tts_provider, offscript_threshold } from the backend.
+  const [config, setConfig] = useState(null);
+  // The header mascot's mood while practising a scene.
+  const [practiceMood, setPracticeMood] = useState("idle");
   // null | "loading" | "transcribing" | "thinking"
   const [stage, setStage] = useState(savedConversationId ? "loading" : null);
   const [error, setError] = useState("");
@@ -388,6 +254,13 @@ export default function App() {
   const scrollRef = useRef("smooth");
   // Assigned by the server on the first reply; groups the conversation's messages.
   const conversationIdRef = useRef(savedConversationId);
+  // Active practice time: Free Talk and scenes count; the dashboard and My Scenes don't.
+  const timer = usePracticeTimer(
+    view === "chat" ? "free_talk" : view === "practice" ? "scene" : null,
+    view === "practice" ? practice?.sceneId : null,
+    () => conversationIdRef.current
+  );
+  const { markActive } = timer;
 
   const oldestId = messages.find((m) => m.serverId)?.serverId;
 
@@ -423,17 +296,48 @@ export default function App() {
       .finally(() => {
         if (!ignore) setStage(null);
       });
-    getToday(conversationId)
-      .then((data) => {
-        if (!ignore) setProgress(data);
-      })
-      .catch(() => {
-        // The goal is a nice-to-have; the chat works without it.
-      });
     return () => {
       ignore = true;
     };
   }, []);
+
+  useEffect(() => {
+    getConfig()
+      .then(setConfig)
+      .catch(() => {
+        // Scene practice falls back to its defaults.
+      });
+  }, []);
+
+  // Which messages are saved as scenes, refreshed when coming back to the chat, since
+  // scenes may have been deleted in My Scenes meanwhile.
+  useEffect(() => {
+    if (view !== "chat") return;
+    let ignore = false;
+    getScenes()
+      .then((scenes) => {
+        if (ignore) return;
+        setSavedScenes(
+          Object.fromEntries(
+            scenes.filter((s) => s.source_message_id).map((s) => [s.source_message_id, s.id])
+          )
+        );
+      })
+      .catch(() => {
+        // The chat works without it; Save as scene just won't know what's saved.
+      });
+    return () => {
+      ignore = true;
+    };
+  }, [view]);
+
+  // Speaking into the mic counts as activity for the practice timer.
+  const speakingLevel = isRecording ? levels[levels.length - 1] : 0;
+  useEffect(() => {
+    if (speakingLevel > 0.15) markActive();
+  }, [speakingLevel, markActive]);
+  // So does listening to Kai's reply.
+  useActiveWhile(view === "chat" && playingId !== null, markActive);
 
   // Load earlier messages as the top of the chat scrolls into view. The observer
   // is recreated after each page, so it keeps loading while the top stays visible.
@@ -460,14 +364,6 @@ export default function App() {
       setOlder("idle");
     } catch {
       setOlder("error");
-    }
-  }
-
-  async function refreshProgress(conversationId) {
-    try {
-      setProgress(await getToday(conversationId));
-    } catch {
-      // Keep showing the last known progress.
     }
   }
 
@@ -504,16 +400,19 @@ export default function App() {
       conversationIdRef.current = data.conversation_id;
       saveConversationId(data.conversation_id);
       setMessages((prev) => [
-        ...prev,
+        ...prev.map((m) => (m.id === userId ? { ...m, serverId: data.user_message_id } : m)),
         {
           id: nextId++,
+          serverId: data.message_id,
           role: "assistant",
           text: data.response,
           audioSrc: mp3Url(data.audio_base64),
           createdAt: new Date(),
+          scene: data.scene,
+          existingScene: data.existing_scene,
+          sceneRequest: data.scene_request,
         },
       ]);
-      refreshProgress(data.conversation_id);
       checkEnglish(
         userId,
         data.conversation_id,
@@ -603,7 +502,9 @@ export default function App() {
   const micLevel = levels[levels.length - 1];
 
   // The header mascot mirrors what the app is doing right now.
-  const mood = isRecording
+  const mood = view === "practice"
+    ? practiceMood
+    : isRecording
     ? "listening"
     : busy
       ? "thinking"
@@ -615,10 +516,36 @@ export default function App() {
 
   // The chat stays mounted while the dashboard is open, so it comes back as it was.
   function showView(next) {
-    if (next === "progress" && isRecording) cancel();
+    if (next !== "chat" && isRecording) cancel();
     // A hidden chat loses its scroll position; return to the latest messages.
     if (next === "chat") scrollRef.current = "jump";
     setView(next);
+  }
+
+  function openScenes(sceneId = null) {
+    setFocusSceneId(sceneId);
+    showView("scenes");
+  }
+
+  function practiseScene(sceneId, role) {
+    setPractice({ sceneId, role });
+    setPracticeMood("idle");
+    showView("practice");
+  }
+
+  // A scene Kai wrote after being asked for a new one, although a saved one matched.
+  function addWrittenScene(data) {
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: nextId++,
+        serverId: data.message_id,
+        role: "assistant",
+        text: data.response,
+        createdAt: new Date(),
+        scene: data.scene,
+      },
+    ]);
   }
 
   function audioEvents(id) {
@@ -636,14 +563,21 @@ export default function App() {
               Daily<span>Tongue</span>
             </span>
           </h1>
-          {progress && (
-            <DailyGoal
-              minutes={progress.minutes}
-              goal={progress.goal_minutes}
-              open={view === "progress"}
-              onClick={() => showView(view === "chat" ? "progress" : "chat")}
+          <div className="header-actions">
+            <ScenesButton
+              open={view === "scenes" || view === "practice"}
+              onClick={() => (view === "scenes" ? showView("chat") : openScenes())}
             />
-          )}
+            {timer.today && (
+              <DailyGoal
+                minutes={Math.floor(timer.today.seconds / 60)}
+                goal={timer.today.goal_minutes}
+                running={timer.running}
+                open={view === "progress"}
+                onClick={() => showView(view === "progress" ? "chat" : "progress")}
+              />
+            )}
+          </div>
         </div>
       </header>
 
@@ -682,6 +616,8 @@ export default function App() {
           {messages.map((m, i) => {
             const newDay =
               i === 0 || istDayKey(m.createdAt) !== istDayKey(messages[i - 1].createdAt);
+            const dialogue = m.role === "assistant" && !m.pending ? parseDialogue(m.text) : null;
+            const request = messages[i - 1]?.role === "user" ? messages[i - 1].text : "";
             return (
               <Fragment key={m.id}>
                 {newDay && <div className="day">{dayLabel(m.createdAt)}</div>}
@@ -693,7 +629,7 @@ export default function App() {
                     mood={playingId === m.id ? "talking" : "rest"}
                   />
                   <div className={`bubble ${m.role}`}>
-                    {m.pending ? <Dots /> : <p>{m.text}</p>}
+                    {m.pending ? <Dots /> : dialogue ? <MessageText text={m.text} /> : <p>{m.text}</p>}
                     {m.audioSrc &&
                       (m.fromHistory ? (
                         <audio controls preload="none" src={m.audioSrc} {...audioEvents(m.id)} />
@@ -701,6 +637,29 @@ export default function App() {
                         <audio controls src={m.audioSrc} autoPlay {...audioEvents(m.id)} />
                       ))}
                   </div>
+                  {dialogue && (
+                    <SaveScene
+                      dialogue={dialogue}
+                      scene={m.scene}
+                      messageId={m.serverId}
+                      suggestedTitle={suggestTitle(request, dialogue.lines[0].text)}
+                      savedId={savedScenes[m.serverId]}
+                      onSaved={(scene) =>
+                        setSavedScenes((prev) => ({ ...prev, [m.serverId]: scene.id }))
+                      }
+                      onOpen={openScenes}
+                    />
+                  )}
+                  {m.existingScene && (
+                    <ExistingScene
+                      existing={m.existingScene}
+                      sceneRequest={m.sceneRequest}
+                      conversationId={conversationIdRef.current}
+                      learnerRequest={request}
+                      onOpen={openScenes}
+                      onWritten={addWrittenScene}
+                    />
+                  )}
                 </div>
                 {m.feedback && <Feedback feedback={m.feedback} />}
               </Fragment>
@@ -813,8 +772,27 @@ export default function App() {
         </form>
       </footer>
 
-      {view === "progress" && (
-        <Dashboard conversationId={conversationIdRef.current} onBack={() => showView("chat")} />
+      {view === "progress" && <Dashboard onBack={() => showView("chat")} />}
+
+      {view === "scenes" && (
+        <SceneLibrary
+          focusId={focusSceneId}
+          onPractice={practiseScene}
+          onBack={() => showView("chat")}
+        />
+      )}
+
+      {view === "practice" && practice && (
+        <ScenePractice
+          key={`${practice.sceneId}-${practice.role}`}
+          sceneId={practice.sceneId}
+          initialRole={practice.role}
+          config={config}
+          markActive={markActive}
+          activeSeconds={timer.activeSeconds}
+          onBack={() => openScenes(practice.sceneId)}
+          onMoodChange={setPracticeMood}
+        />
       )}
     </div>
   );

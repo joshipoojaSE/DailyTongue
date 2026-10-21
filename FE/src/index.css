@@ -1183,3 +1183,550 @@ button:disabled {
     height: 52px;
   }
 }
+
+/* ===== Scenes ===== */
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* "My Scenes" beside the daily goal. */
+.scenes-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 18px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  box-shadow: 0 3px 0 var(--ledge);
+  color: var(--ink);
+  font-family: "Fredoka", "Nunito", "Segoe UI", system-ui, sans-serif;
+  font-size: 1.05rem;
+  font-weight: 600;
+  transition: border-color 0.15s;
+}
+
+.scenes-button svg {
+  color: var(--accent);
+}
+
+.scenes-button:hover {
+  border-color: #ffb3c4;
+}
+
+.scenes-button.open {
+  border-color: var(--accent);
+  box-shadow: 0 3px 0 #ffc4d1;
+}
+
+/* Buttons used across scenes: pink (primary), outlined (default), or plain (quiet). */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 16px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 2px solid #ffc9d5;
+  color: var(--accent-ledge);
+  font-size: 0.9rem;
+  font-weight: 800;
+  transition: background 0.15s, transform 0.1s, box-shadow 0.1s;
+}
+
+.pill:not(:disabled):hover {
+  background: var(--accent-soft);
+}
+
+.pill.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  box-shadow: 0 3px 0 var(--accent-ledge);
+}
+
+.pill.primary:not(:disabled):hover {
+  background: #ff4a6d;
+}
+
+.pill.primary:not(:disabled):active {
+  transform: translateY(2px);
+  box-shadow: 0 1px 0 var(--accent-ledge);
+}
+
+.pill.quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+
+.pill.quiet:not(:disabled):hover {
+  background: var(--accent-soft);
+  color: var(--accent-ledge);
+}
+
+.pill.danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+
+.pill:disabled {
+  opacity: 0.55;
+}
+
+.scenes-button:focus-visible,
+.pill:focus-visible,
+.replay:focus-visible,
+.line-toggle:focus-visible {
+  outline: 3px solid #ffb3c4;
+  outline-offset: 3px;
+}
+
+/* A dialogue in Kai's bubble: one line per speaker, the name in bold. */
+.bubble .dialogue-line strong {
+  color: var(--accent-ledge);
+}
+
+.bubble p + p {
+  margin-top: 6px;
+}
+
+/* "Save as scene" under a dialogue message. */
+.save-scene {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.save-scene-hint {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.save-scene.saved > span {
+  color: #25734b;
+  font-size: 0.88rem;
+  font-weight: 800;
+}
+
+.save-scene.editing {
+  flex-direction: column;
+  align-items: stretch;
+  width: min(420px, 100%);
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  box-shadow: 0 3px 0 var(--ledge);
+}
+
+.save-scene label span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.save-scene input,
+.scene-rename input {
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 12px;
+  border: 2px solid var(--border);
+  outline: none;
+  font: inherit;
+  color: var(--text);
+}
+
+.save-scene input:focus,
+.scene-rename input:focus {
+  border-color: #ffc4d1;
+}
+
+.save-scene-buttons {
+  display: flex;
+  gap: 6px;
+}
+
+.scene-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+/* My Scenes. */
+.scene-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.scene-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 18px;
+  border-radius: 20px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  box-shadow: 0 4px 0 var(--ledge);
+  transition: border-color 0.3s;
+}
+
+.scene-card.focused {
+  border-color: var(--accent);
+}
+
+.scene-card h3 {
+  margin: 0;
+  font-family: "Fredoka", "Nunito", "Segoe UI", system-ui, sans-serif;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.scene-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.scene-meta span:first-child {
+  color: var(--accent-ledge);
+}
+
+.scene-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.scene-tools {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.scene-confirm {
+  color: var(--danger);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.scene-rename {
+  display: flex;
+  gap: 6px;
+}
+
+/* Scene practice. */
+.practice-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.practice-head h2 {
+  margin: 4px 0 0;
+  font-family: "Fredoka", "Nunito", "Segoe UI", system-ui, sans-serif;
+  font-size: 1.6rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.practice-head p {
+  margin: 0;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.practice-head strong {
+  color: var(--accent-ledge);
+}
+
+.replay {
+  display: block;
+  margin-top: 6px;
+  padding: 0;
+  background: none;
+  color: var(--accent-ledge);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.replay:disabled {
+  opacity: 0.5;
+}
+
+/* How the learner's line compared with the script, under their bubble. */
+.line-result {
+  align-self: flex-end;
+  max-width: 80%;
+  margin-top: -6px;
+  padding: 8px 16px 10px;
+  border-radius: 16px;
+  border: 2px solid;
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+.line-result.great {
+  background: #eaf8f0;
+  border-color: #bfe8d0;
+  color: #25734b;
+}
+
+.line-result.good {
+  background: #fff8e6;
+  border-color: #f6e2b0;
+  color: #6b5317;
+}
+
+.line-result.off {
+  background: var(--danger-bg);
+  border-color: #f6c4c4;
+  color: #9b2c2c;
+}
+
+.line-result-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 800;
+}
+
+.score {
+  display: inline-block;
+  min-width: 3.2em;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 2px solid currentColor;
+  text-align: center;
+  font-family: "Fredoka", "Nunito", "Segoe UI", system-ui, sans-serif;
+  font-weight: 600;
+}
+
+.diff {
+  margin: 6px 0 0;
+  color: var(--text);
+}
+
+.diff-missed {
+  color: #b5476a;
+  text-decoration: underline wavy;
+  text-underline-offset: 3px;
+}
+
+.diff-extra {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.diff-changed s {
+  color: var(--muted);
+}
+
+.diff-changed strong {
+  color: #b5476a;
+}
+
+.diff-legend {
+  display: flex;
+  gap: 12px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.diff-legend strong {
+  font-weight: 800;
+}
+
+/* The learner's next line, above the composer. */
+.line-card {
+  margin-bottom: 10px;
+  padding: 10px 16px 12px;
+  border-radius: 18px;
+  background: var(--accent-soft);
+  border: 2px solid #ffd3dd;
+}
+
+.line-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--accent-ledge);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.line-card-buttons {
+  display: flex;
+  gap: 6px;
+}
+
+.line-toggle:disabled {
+  opacity: 0.6;
+}
+
+.line-toggle {
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--accent-ledge);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.line-text {
+  margin: 6px 0 0;
+  font-family: "Fredoka", "Nunito", "Segoe UI", system-ui, sans-serif;
+  font-size: 1.2rem;
+  line-height: 1.4;
+  color: var(--ink);
+}
+
+.line-text.hidden-line {
+  color: var(--accent-soft-text);
+  font-style: italic;
+}
+
+.listening-hint.heard {
+  margin: 0;
+  color: var(--ink);
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+
+/* While Kai says a line. */
+.speaking-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 10px 10px 18px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  box-shadow: 0 5px 0 var(--ledge);
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.speaking-bar span {
+  flex: 1;
+}
+
+/* End of a run. */
+.summary {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  text-align: center;
+}
+
+.summary h3 {
+  margin: 0;
+  font-size: 1.4rem;
+}
+
+.summary h4 {
+  margin: 8px 0 0;
+  color: var(--ink);
+}
+
+.summary p {
+  margin: 0;
+}
+
+.summary-score {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.summary-score span {
+  font-family: "Fredoka", "Nunito", "Segoe UI", system-ui, sans-serif;
+  font-size: 1.8rem;
+  font-weight: 600;
+  color: var(--accent);
+  vertical-align: middle;
+}
+
+.weak-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+}
+
+.weak-lines li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: var(--bg);
+}
+
+.weak-lines .score {
+  flex-shrink: 0;
+  color: var(--accent-ledge);
+}
+
+.summary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+@media (max-width: 480px) {
+  .header-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .scenes-button {
+    padding: 10px 14px;
+  }
+
+  .scenes-button span {
+    font-size: 0.95rem;
+  }
+
+  .line-result,
+  .message {
+    max-width: 92%;
+  }
+
+  .scene-tools {
+    margin-left: 0;
+  }
+}
