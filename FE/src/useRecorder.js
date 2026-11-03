@@ -119,7 +119,15 @@ export function useRecorder({ onSilence, onNoSpeech } = {}) {
   }
 
   async function start() {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    // Clean up the input before it reaches the silence detector and the transcriber.
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        noiseSuppression: true,
+        echoCancellation: true,
+        autoGainControl: true,
+        channelCount: 1,
+      },
+    });
     const format = pickFormat();
     const recorder = new MediaRecorder(
       stream,
