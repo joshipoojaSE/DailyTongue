@@ -1612,13 +1612,6 @@ button:disabled {
   font-style: italic;
 }
 
-.listening-hint.heard {
-  margin: 0;
-  color: var(--ink);
-  font-size: 1rem;
-  overflow-wrap: anywhere;
-}
-
 /* While Kai says a line. */
 .speaking-bar {
   display: flex;

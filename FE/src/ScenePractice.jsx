@@ -1,13 +1,18 @@
 // Scene practice: the learner plays one character of a saved scene and Kai plays the other.
-// Lines are checked in the browser, and Kai's lines play from stored audio (or the browser's
-// own speech), so a run makes no OpenAI requests. Ila, the tutor, stays out of scenes.
+// A spoken line is transcribed by OpenAI, with the script line as context, then checked in
+// the browser. Kai's lines play from stored audio (or the browser's own speech). Ila, the
+// tutor, stays out of scenes.
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { finishRun, getScene, sceneLineAudioUrl, startRun } from "./api.js";
+import { finishRun, getScene, sceneLineAudioUrl, startRun, transcribeAudio } from "./api.js";
 import { BackButton, KeyboardIcon, MicIcon } from "./common.jsx";
 import { compareLines } from "./scene.js";
 import Tongue from "./Tongue.jsx";
 import { useActiveWhile } from "./usePracticeTimer.js";
-import { LINE_SILENCE_MS, speechSupported, useSpeechInput } from "./useSpeechInput.js";
+import { SILENCE_MS, useRecorder } from "./useRecorder.js";
+
+const recordingSupported =
+  typeof window !== "undefined" &&
+  Boolean(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
 
 // Whether to show the learner's next line, or hide it so they say it from memory.
 const SHOW_LINE_KEY = "dailytongue.showLine";
@@ -190,6 +195,8 @@ export default function ScenePractice({
   const [error, setError] = useState("");
   // The id of the line being played, if any.
   const [playingId, setPlayingId] = useState(null);
+  // Whether a spoken line is being transcribed.
+  const [transcribing, setTranscribing] = useState(false);
   // The current run. token changes on each restart, so callbacks from an earlier run stop.
   const runRef = useRef({ token: 0, run: null, startSeconds: 0 });
   const audioRef = useRef(null);
@@ -202,16 +209,13 @@ export default function ScenePractice({
   const provider = config?.scene_tts_provider ?? "openai_cached";
   const threshold = config?.offscript_threshold ?? 0.7;
 
-  // Listening to Kai's lines (or hearing your own) is practice too.
-  useActiveWhile(playingId !== null, markActive);
-
-  const speech = useSpeechInput({
-    onResult: (text) => {
-      if (text) submit(text, "spoken");
-      else setError("I didn't catch that. Tap the mic to try again, or type your line.");
-    },
-    onSpeech: markActive,
+  const { isRecording, hasSpoken, levels, start, stop, cancel } = useRecorder({
+    onSilence: finishRecording,
+    onNoSpeech: stopListening,
   });
+
+  // Listening to Kai's lines (or hearing your own), and saying yours, are practice too.
+  useActiveWhile(playingId !== null || isRecording, markActive);
 
   useEffect(() => {
     let ignore = false;
@@ -250,9 +254,11 @@ export default function ScenePractice({
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [index, phase, results]);
 
-  const mood = speech.listening
+  const mood = isRecording
     ? "listening"
-    : playingId
+    : transcribing
+      ? "thinking"
+      : playingId
       ? "talking"
       : phase === "done"
         ? "happy"
@@ -337,7 +343,7 @@ export default function ScenePractice({
 
   function begin(nextRole) {
     stopAudio();
-    speech.cancel();
+    cancel();
     const token = runRef.current.token + 1;
     const run = startRun(scene.id, nextRole);
     run.catch(() => {
@@ -417,9 +423,38 @@ export default function ScenePractice({
     if (text) submit(text, "typed");
   }
 
-  function startListening() {
+  async function startListening() {
     setError("");
-    speech.start();
+    try {
+      await start();
+    } catch {
+      setError("Microphone access was denied or is unavailable. Type your line instead.");
+    }
+  }
+
+  async function finishRecording() {
+    const { token } = runRef.current;
+    const line = scene.lines[index];
+    const result = await stop();
+    if (!result || result.blob.size === 0) return;
+    setTranscribing(true);
+    try {
+      const { transcript } = await transcribeAudio(result.blob, result.filename, line.text);
+      if (runRef.current.token !== token) return;
+      if (transcript.trim()) submit(transcript.trim(), "spoken");
+      else setError("I didn't catch that. Tap the mic to try again, or type your line.");
+    } catch (err) {
+      if (runRef.current.token === token)
+        setError(err.message || "Couldn't check that line. Try again, or type it.");
+    } finally {
+      setTranscribing(false);
+    }
+  }
+
+  // Nothing was said after tapping the mic, so there's nothing worth transcribing.
+  function stopListening() {
+    cancel();
+    setError("I didn't hear anything, so I stopped listening. Tap the mic to try again.");
   }
 
   if (loadError || !scene) {
@@ -443,7 +478,8 @@ export default function ScenePractice({
   // once they've said it.
   const shown = phase === "done" ? scene.lines.length : phase === "partner" ? index + 1 : index;
   const current = scene.lines[index];
-  const shownError = error || speech.error;
+  const shownError = error;
+  const micLevel = levels[levels.length - 1];
 
   return (
     <>
@@ -547,7 +583,7 @@ export default function ScenePractice({
                   type="button"
                   className="line-toggle"
                   onClick={() => playLine(current)}
-                  disabled={playingId !== null || speech.listening}
+                  disabled={playingId !== null || isRecording || transcribing}
                 >
                   {playingId === current.id ? "Playing…" : "Hear it"}
                 </button>
@@ -570,25 +606,35 @@ export default function ScenePractice({
             )}
           </div>
 
-          <form className={`composer ${speech.listening ? "recording" : ""}`} onSubmit={submitText}>
-            {speech.listening ? (
+          <form className={`composer ${isRecording ? "recording" : ""}`} onSubmit={submitText}>
+            {transcribing ? (
+              <div className="listening" role="status">
+                <Tongue size={40} mood="thinking" />
+                <div className="listening-body">
+                  <p className="listening-hint">Checking your line…</p>
+                </div>
+              </div>
+            ) : isRecording ? (
               <>
                 <div className="listening" role="status">
-                  <Tongue size={40} mood="listening" level={speech.heard ? 0.6 : 0.2} />
+                  <Tongue size={40} mood="listening" level={micLevel} />
                   <div className="listening-body">
-                    <p className="listening-hint heard">
-                      {speech.heard || "Listening… take your time and say the whole line"}
-                    </p>
+                    <div className="waveform" aria-hidden="true">
+                      {levels.map((level, i) => (
+                        <span key={i} style={{ height: 8 + level * 22 }} />
+                      ))}
+                    </div>
                     <p className="listening-hint">
-                      Tap ■ when you've finished, or I'll stop after{" "}
-                      {LINE_SILENCE_MS / 1000} seconds of quiet
+                      {hasSpoken
+                        ? `Tap ■ when you've finished, or I'll stop after ${SILENCE_MS / 1000} seconds of quiet`
+                        : "Listening… take your time and say the whole line"}
                     </p>
                   </div>
                 </div>
                 <button
                   type="button"
                   className="cancel"
-                  onClick={speech.cancel}
+                  onClick={cancel}
                   aria-label="Cancel listening"
                 >
                   <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
@@ -610,12 +656,12 @@ export default function ScenePractice({
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
                   placeholder={
-                    speechSupported
+                    recordingSupported
                       ? "Say your line, or type it"
-                      : "Type your line (this browser can't listen)"
+                      : "Type your line (this browser can't record)"
                   }
                   aria-label="Your line"
-                  autoFocus={!speechSupported}
+                  autoFocus={!recordingSupported}
                 />
                 <button
                   type="submit"
@@ -639,13 +685,13 @@ export default function ScenePractice({
 
             <button
               type="button"
-              className={`mic ${speech.listening ? "recording" : ""}`}
-              onClick={speech.listening ? speech.stop : startListening}
-              disabled={!speechSupported}
-              aria-label={speech.listening ? "Stop listening" : "Say your line"}
-              title={speechSupported ? undefined : "Speech recognition isn't supported in this browser"}
+              className={`mic ${isRecording ? "recording" : ""}`}
+              onClick={isRecording ? finishRecording : startListening}
+              disabled={!recordingSupported || transcribing}
+              aria-label={isRecording ? "Stop listening" : "Say your line"}
+              title={recordingSupported ? undefined : "Recording isn't supported in this browser"}
             >
-              {speech.listening ? (
+              {isRecording ? (
                 <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
                   <rect x="6" y="6" width="12" height="12" rx="2.5" fill="currentColor" />
                 </svg>

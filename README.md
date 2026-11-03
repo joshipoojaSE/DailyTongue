@@ -2,7 +2,7 @@
 
 **A voice-first English speaking coach.** You talk to an AI partner out loud. A second AI quietly corrects your English as you go. You can also rehearse scripted dialogues line by line and see how much you practise each day.
 
-I built this as a full-stack demo: a **FastAPI** backend that coordinates three OpenAI models (speech-to-text, chat and text-to-speech), **Neon Postgres** for storage, and a **React (Vite)** frontend that handles microphone recording, browser speech recognition, line scoring and a hand-built SVG chart.
+I built this as a full-stack demo: a **FastAPI** backend that coordinates three OpenAI models (speech-to-text, chat and text-to-speech), **Neon Postgres** for storage, and a **React (Vite)** frontend that handles microphone recording, line scoring and a hand-built SVG chart.
 
 - **[BE/](BE/)**: FastAPI backend ([BE/README.md](BE/README.md))
 - **[FE/](FE/)**: React frontend ([FE/README.md](FE/README.md))
@@ -13,10 +13,10 @@ I built this as a full-stack demo: a **FastAPI** backend that coordinates three 
 
 | Feature | What the learner sees | What happens underneath |
 | ------- | --------------------- | ----------------------- |
-| **Free Talk** | Tap the mic and speak, or type. You see your transcript, then hear Kai's spoken reply. | Two requests: `/transcribe` first, then `/respond`, so your words show up before the reply is ready. Recording stops by itself after 2 s of silence. |
+| **Free Talk** | Tap the mic and speak, or type. You see your transcript, then hear Kai's spoken reply. | Two requests: `/transcribe` first, then `/respond`, so your words show up before the reply is ready. Recording stops by itself after 4 s of silence. |
 | **Tutor feedback** | An **Ila · Tutor** note under each of your messages: the corrected sentence, each mistake explained, and a more natural way to say it, with 🔊 to hear both. | A separate tutor agent reads the whole conversation and returns **structured output** (Pydantic schema). It runs after Kai's reply, so it never slows that reply down. |
 | **Scenes** | Ask Kai for "a dialogue between Maya and Arjun in a forest at night". Save it, then practise it playing either character. | Kai uses **tool calling** (`create_scene`), and a second prompt writes the scene as strict JSON. Requests are deduplicated with a `cache_key` hash. |
-| **Scene practice** | Say your line. You get a score, with missed, extra and changed words marked. At the end you see your average score and weakest lines. | Recognition uses the browser's Web Speech API, and scoring is a **word-level edit distance** in the browser. Each line's audio is generated once and cached in Postgres, so **a replay costs no OpenAI calls**. |
+| **Scene practice** | Say your line. You get a score, with missed, extra and changed words marked. At the end you see your average score and weakest lines. | Your line is transcribed by `/transcribe` with the script line as context, and scoring is a **word-level edit distance** in the browser. Each line's audio is generated once and cached in Postgres, so **a replay costs no OpenAI calls**. |
 | **Daily goal** | A ring in the header shows "X of 60 min today", with a "paused" state. | Time counts only while you're actively speaking, typing or listening. A heartbeat goes to the backend every 15 s, and totals are added up per IST day. |
 | **Progress dashboard** | Total, daily average, goal-met days, best day, a bar chart of minutes per day and a day-by-day list, over 7, 30 or 90 days. | `GET /activity?days=N`. The chart is hand-written SVG (no chart library), resizes with the window and can be read with the keyboard. |
 | **History** | Reload the page and the conversation is still there. Older messages load as you scroll up. Each message is labelled with who sent it, whether it was spoken or typed, and the time in IST (for example "You · spoken · 19:40"), with day dividers. | Cursor-based pagination (`?before=<id>&limit=30`). Kai's reply audio is stored, so old replies replay without new TTS calls. |
@@ -37,7 +37,7 @@ Kai never sees Ila's feedback, so the conversation stays natural. Ila stays out 
 ```
                          ┌──────────────────── Browser (React + Vite) ────────────────────┐
                          │  MediaRecorder + Web Audio (waveform, stop after silence)      │
-                         │  Web Speech API (scene lines)   scene.js (line scoring)        │
+                         │  scene.js (line scoring)                                       │
                          │  usePracticeTimer (active time, heartbeat every 15 s)          │
                          └───────────────┬────────────────────────────────────────────────┘
                                          │  /api/*  (Vite dev proxy)
@@ -67,7 +67,7 @@ Mic ──► FE ──POST /transcribe──► BE ──► gpt-4o-mini-transc
 - **Latency.** Transcription and reply are separate requests, so the learner sees their own words straight away. Ila's feedback is fetched only after Kai's reply arrives, so the tutor never makes the conversation wait. (`POST /chat` does all three steps in one request, for clients that don't need this.)
 - **OpenAI cost.**
   - Scene lines are voiced once and cached as MP3 in Postgres. On the first run, lines are generated in the background for *both* roles, so switching roles costs nothing.
-  - Line scoring and speech recognition run in the browser.
+  - Line scoring runs in the browser.
   - Asking for the same scene again is caught by a sha256 `cache_key` over the normalised situation, topic and characters (filler words removed, character order ignored), and Kai offers the saved one.
   - Each tutor sentence's audio is fetched once and reused.
   - Every OpenAI call is logged (`openai call #12: tts (nova): ...`), so you can check that a replay makes zero calls.
@@ -88,7 +88,7 @@ Mic ──► FE ──POST /transcribe──► BE ──► gpt-4o-mini-transc
 | Backend | Python 3.10+, FastAPI, Pydantic, Uvicorn, OpenAI Python SDK, pg8000, python-dotenv |
 | AI models | `gpt-4o-mini-transcribe` (STT), `gpt-4.1-mini` (Kai, scene writer, Ila), `gpt-4o-mini-tts` (voices) |
 | Database | Neon (serverless Postgres) |
-| Frontend | React 18, Vite 6, plain CSS, MediaRecorder, Web Audio API, Web Speech API, `speechSynthesis` |
+| Frontend | React 18, Vite 6, plain CSS, MediaRecorder, Web Audio API, `speechSynthesis` |
 | Tests | pytest (backend), Vitest (frontend) |
 
 ## Project structure
@@ -109,7 +109,7 @@ demo/
         ├── Dashboard.jsx   progress dashboard and SVG chart
         ├── SceneLibrary.jsx · SaveScene.jsx · ScenePractice.jsx
         ├── scene.js        dialogue parser and line scoring (+ scene.test.js)
-        ├── useRecorder.js · useSpeechInput.js · usePracticeTimer.js
+        ├── useRecorder.js · usePracticeTimer.js
         ├── Tongue.jsx      mascot
         ├── common.jsx      shared UI (tutor note, 🔊 button, icons)
         └── api.js          one function per backend endpoint
@@ -154,7 +154,7 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173 in **Chrome or Edge** (scene practice uses their speech recognition; in other browsers you type your lines instead). Tap the mic and start speaking.
+Open http://localhost:5173 and tap the mic to start speaking.
 
 In development, Vite proxies `/api/*` to the backend, so you don't need to set up CORS.
 
@@ -172,7 +172,7 @@ Interactive docs are at http://127.0.0.1:8000/docs while the server is running.
 
 | Method | Path | Body | Returns |
 | ------ | ---- | ---- | ------- |
-| POST | `/transcribe` | multipart form, `audio` file | `{ transcript }` |
+| POST | `/transcribe` | multipart form, `audio` file, optional `expected` (the script line, in scene practice) | `{ transcript }` |
 | POST | `/respond` | JSON `{ messages: [{ role, content }], conversation_id?, input? }` (`"spoken"` or `"typed"`) | `{ response, audio_base64, conversation_id, user_message_id, message_id, scene?, existing_scene?, scene_request? }` |
 | POST | `/chat` | multipart form, `audio` file, optional `conversation_id` | `{ transcript, response, audio_base64, conversation_id, user_message_id, message_id, feedback }` |
 | POST | `/conversations/{id}/feedback` | JSON `{ messages, message_id? }` | `{ id, message, corrected, mistakes: [{ original, correction, explanation }], rephrased, created_at }` |
@@ -230,5 +230,4 @@ These were deliberate scope choices for a demo:
 
 - **One user, no accounts.** Scenes and daily totals are shared by everyone using the same backend. The conversation id lives in `localStorage`.
 - **CORS isn't configured.** In development the Vite proxy handles it. Serving the frontend from another origin requires adding CORS middleware.
-- **Speech recognition in scene practice needs Chrome or Edge.** Other browsers fall back to typing.
 - **"Today" is fixed to India Standard Time (IST)**, the learners' time zone.

@@ -126,6 +126,12 @@ CREATE_SCENE_TOOL = {
     },
 }
 
+# Context for the transcriber, which otherwise mishears accented or hesitant speech.
+TRANSCRIBE_PROMPT = (
+    "An English learner, often with an Indian accent, speaking casually to a tutor. "
+    "Transcribe every word exactly as spoken, including grammar mistakes and repeated words."
+)
+
 # Writes the dialogue for a create_scene request, as strict JSON.
 SCENE_PROMPT = """You write short scripted dialogues for English learners to practise
 speaking aloud. Write natural, everyday spoken English at an intermediate level: short
@@ -553,7 +559,7 @@ def save_feedback(
     )
 
 
-async def transcribe_upload(audio: UploadFile) -> str:
+async def transcribe_upload(audio: UploadFile, expected: str | None = None) -> str:
     if not audio.filename:
         raise HTTPException(status_code=400, detail="An audio file is required")
 
@@ -567,11 +573,21 @@ async def transcribe_upload(audio: UploadFile) -> str:
             file_path = file.name
 
         try:
+            prompt = TRANSCRIBE_PROMPT
+            if expected:
+                # In scene practice the line is known; telling the model what it's likely
+                # to hear stops it guessing at accented or hesitant words.
+                prompt += (
+                    " They are saying this line from a script, though their words may differ:"
+                    f' "{expected}"'
+                )
             log_openai("transcribe")
             with open(file_path, "rb") as audio_file:
                 transcription = await client.audio.transcriptions.create(
                     model="gpt-4o-mini-transcribe",
                     file=audio_file,
+                    language="en",
+                    prompt=prompt,
                 )
             return transcription.text
         except Exception as error:
@@ -775,8 +791,11 @@ async def chat(
 
 
 @app.post("/transcribe", response_model=TranscribeResponse)
-async def transcribe(audio: UploadFile = File(...)) -> TranscribeResponse:
-    return TranscribeResponse(transcript=await transcribe_upload(audio))
+async def transcribe(
+    audio: UploadFile = File(...),
+    expected: str | None = Form(default=None, max_length=1000),
+) -> TranscribeResponse:
+    return TranscribeResponse(transcript=await transcribe_upload(audio, expected))
 
 
 @app.post("/respond", response_model=RespondResponse)

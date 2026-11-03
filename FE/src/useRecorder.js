@@ -5,13 +5,15 @@ export const BAR_COUNT = 40;
 const SAMPLE_MS = 70;
 
 // Once the user has spoken, this much continuous quiet ends the recording.
-export const SILENCE_MS = 2000;
+// Long enough that a pause to think mid-explanation doesn't cut them off.
+export const SILENCE_MS = 4000;
 // If the user hasn't started speaking by then, the recording gives up.
 const NO_SPEECH_MS = 8000;
 // The recording ends after this long regardless, e.g. when background noise never goes quiet.
 const MAX_RECORDING_MS = 2 * 60 * 1000;
-// RMS level (0–1) below which the mic counts as quiet.
-const SILENCE_RMS = 0.02;
+// RMS level (0–1) below which the mic counts as quiet (about -40 dB), low
+// enough that soft speech and trailing syllables still count as speaking.
+const SILENCE_RMS = 0.01;
 
 const emptyLevels = () => Array(BAR_COUNT).fill(0);
 
@@ -131,10 +133,11 @@ export function useRecorder({ onSilence, onNoSpeech } = {}) {
 
     formatRef.current = format;
     recorderRef.current = recorder;
+    // Start recording before anything else so the first word isn't lost.
+    recorder.start();
     setLevels(emptyLevels());
     setHasSpoken(false);
     startMeter(stream);
-    recorder.start();
     setIsRecording(true);
   }
 

@@ -21,10 +21,14 @@ async function parse(res) {
   return res.json();
 }
 
-/** Sends recorded audio; resolves to { transcript }. */
-export function transcribeAudio(blob, filename) {
+/**
+ * Sends recorded audio; resolves to { transcript }. expected is the script line in scene
+ * practice, which helps the transcriber hear it right.
+ */
+export function transcribeAudio(blob, filename, expected) {
   const form = new FormData();
   form.append("audio", blob, filename);
+  if (expected) form.append("expected", expected);
   return request("/transcribe", { body: form });
 }
 
