@@ -79,6 +79,7 @@ Mic ──► FE ──POST /transcribe──► BE ──► gpt-4o-mini-transc
   - psycopg's binary DLL is blocked by Windows Smart App Control, so I switched to **pg8000** (pure Python) and wrote a small connection pool ([BE/db.py](BE/db.py)).
   - Neon drops idle connections, so the pool health-checks each connection before reusing it, and retires connections after 120 s idle or 600 s total.
   - Tables are created or upgraded on startup (`CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`), so no migration step is needed.
+- **Accuracy over speed in speech-to-text.** Groq's `whisper-large-v3` was 3–5× faster but changed what learners said ("two brothers" became "a teacher"), so I kept OpenAI. See [docs/speech-to-text-groq-trial.md](docs/speech-to-text-groq-trial.md).
 - **Testable core.** Scene validation, `cache_key` and the IST day-splitting live in modules that use neither the database nor OpenAI ([BE/scenes.py](BE/scenes.py), [BE/activity.py](BE/activity.py)), and are covered by pytest. The dialogue parser and line scorer are covered by Vitest.
 
 ## Tech stack
